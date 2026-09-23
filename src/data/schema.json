@@ -1,0 +1,513 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lfkdsk/pocket-rpgkit/blob/main/src/data/schema.json",
+  "title": "Pocket RPG Kit project format v1",
+  "$comment": "Format version v1; see src/data/CHANGELOG.md. The normative format marker on every document is \"format\": \"rpgkit-project/v1\".",
+  "description": "Self-owned RPG kit data format. Tile ids are 'sheet.cell' strings; each sheet is one cooked TILESET pak entry (16x16 cells). Time-bearing commands use SECONDS of virtual time; the runtime converts via simulationHz, so data stays hz-portable.",
+  "type": "object",
+  "required": ["format", "title", "tileSize", "start", "sheets", "maps", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "rpgkit-project/v1" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "tileSize": { "type": "integer", "enum": [16] },
+    "start": { "$ref": "#/$defs/transferTarget" },
+    "initialGold": { "type": "integer", "minimum": 0 },
+    "sheets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/sheet" }
+    },
+    "sprites": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/spriteDef" }
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "actors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/actor" }
+    },
+    "commonEvents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/commonEvent" }
+    },
+    "maps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/map" }
+    }
+  },
+
+  "$defs": {
+    "tileId": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+\\.[0-9]+$",
+      "description": "Sheet id, '.', zero-based cell index in the cooked sheet grid."
+    },
+    "cellOrNull": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/tileId" }]
+    },
+    "sheet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "pak", "cols", "rows"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "pak": { "type": "string", "description": "TILESET pak entry file (cooked via repro/tools/cook-tileset.ts)." },
+        "cols": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "rows": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "defaultPassage": { "enum": ["pass", "block"] },
+        "block": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "Cells that block all directions (defaultPassage=pass sheets)."
+        },
+        "pass": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "Cells that are walkable despite defaultPassage=block."
+        },
+        "dirBlock": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "enum": ["down", "left", "right", "up"] },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "description": "Map key is the cell index (as string); value lists blocked exit directions."
+        }
+      }
+    },
+    "spriteDef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "src"],
+          "properties": {
+            "kind": { "const": "image" },
+            "src": { "type": "string", "description": "PNG baked as an IMG pak entry (16x16 for static characters)." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "atlases", "frames", "step"],
+          "properties": {
+            "kind": { "const": "walker" },
+            "atlases": {
+              "type": "object",
+              "required": ["down", "left", "right", "up"],
+              "additionalProperties": false,
+              "properties": {
+                "down": { "type": "string" },
+                "left": { "type": "string" },
+                "right": { "type": "string" },
+                "up": { "type": "string" }
+              }
+            },
+            "frames": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "step": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Virtual frames each walk frame is held." }
+          }
+        }
+      ]
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "sprite"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "sprite": { "$ref": "#/$defs/tileId" },
+        "usable": { "type": "boolean" }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "sprite"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "sprite": { "type": "string", "description": "Key in project.sprites." },
+        "moveSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 }
+      }
+    },
+    "map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "width", "height", "sheets", "ground", "events"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "width": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "sheets": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "ground": {
+          "type": "array",
+          "description": "Row-major, length width*height; null is a blocking void.",
+          "items": { "$ref": "#/$defs/cellOrNull" }
+        },
+        "upper": {
+          "type": "array",
+          "description": "Row-major star layer (drawn above characters, always walkable); sparse [[index, tileId], ...].",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/tileId" }]
+          },
+          "uniqueItems": true
+        },
+        "passage": {
+          "type": "array",
+          "description": "Per-cell passage overrides: [index, 'pass'|'block']. Applied after sheet flags (doors over walls).",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [{ "type": "integer", "minimum": 0 }, { "enum": ["pass", "block"] }]
+          },
+          "uniqueItems": true
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "x", "y", "pages"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "name": { "type": "string" },
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/page" }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "commands"],
+      "properties": {
+        "condition": { "$ref": "#/$defs/pageCondition" },
+        "trigger": { "enum": ["action", "playerTouch", "autorun", "parallel"] },
+        "sprite": { "type": ["string", "null"], "description": "Key in project.sprites; null = no character (touch trigger tile only)." },
+        "blocks": { "type": "boolean", "description": "true = the event body blocks movement (closed gates); default false = below-characters, walkable, touch fires on entry (MV priorityType 0 semantics)." },
+        "moveType": { "enum": ["static", "random", "approach"] },
+        "moveRoute": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["steps", "repeat", "skippable"],
+          "properties": {
+            "steps": { "type": "array", "items": { "$ref": "#/$defs/moveStep" }, "minItems": 1 },
+            "repeat": { "type": "boolean" },
+            "skippable": { "type": "boolean" }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/command" }
+        }
+      }
+    },
+    "pageCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "switch": { "type": "string" },
+        "selfSwitch": { "enum": ["A", "B", "C", "D"] },
+        "variable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "op", "value"],
+          "properties": {
+            "id": { "type": "string" },
+            "op": { "enum": [">=", "<=", "==", "!="] },
+            "value": { "type": "integer" }
+          }
+        },
+        "item": { "type": "string" }
+      }
+    },
+
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "lines"],
+          "properties": {
+            "op": { "const": "text" },
+            "lines": { "type": "array", "items": { "type": "string", "maxLength": 52 }, "minItems": 1, "maxItems": 4 },
+            "cps": { "type": "integer", "minimum": 1, "maximum": 120, "description": "Chars per virtual second of typewriter reveal; default 30." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "prompt", "options"],
+          "properties": {
+            "op": { "const": "choices" },
+            "prompt": { "type": "string", "maxLength": 52 },
+            "options": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "commands"],
+                "properties": {
+                  "text": { "type": "string", "minLength": 1, "maxLength": 24 },
+                  "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } }
+                }
+              }
+            },
+            "cancel": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["commands"],
+              "properties": { "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id", "value"],
+          "properties": {
+            "op": { "const": "switch" },
+            "id": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id", "set"],
+          "properties": {
+            "op": { "const": "variable" },
+            "id": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
+            "set": {
+              "oneOf": [
+                { "type": "object", "additionalProperties": false, "required": ["op", "value"],
+                  "properties": { "op": { "enum": ["set", "add", "sub"] }, "value": { "type": "integer" } } },
+                { "type": "object", "additionalProperties": false, "required": ["op", "min", "max"],
+                  "properties": { "op": { "const": "random" }, "min": { "type": "integer" }, "max": { "type": "integer" } } }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "key", "value"],
+          "properties": {
+            "op": { "const": "selfSwitch" },
+            "key": { "enum": ["A", "B", "C", "D"] },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "if", "then"],
+          "properties": {
+            "op": { "const": "if" },
+            "if": { "$ref": "#/$defs/condition" },
+            "then": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+            "else": { "type": "array", "items": { "$ref": "#/$defs/command" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "map", "x", "y"],
+          "properties": {
+            "op": { "const": "transfer" },
+            "map": { "type": "string" },
+            "x": { "type": "integer", "minimum": 0 },
+            "y": { "type": "integer", "minimum": 0 },
+            "dir": { "enum": ["down", "left", "right", "up", "keep"] },
+            "fade": { "type": "number", "minimum": 0, "maximum": 2 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "target", "route"],
+          "properties": {
+            "op": { "const": "moveRoute" },
+            "target": { "enum": ["player", "this"] },
+            "wait": { "type": "boolean" },
+            "route": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["steps", "repeat", "skippable"],
+              "properties": {
+                "steps": { "type": "array", "items": { "$ref": "#/$defs/moveStep" } },
+                "repeat": { "type": "boolean" },
+                "skippable": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "seconds"],
+          "properties": {
+            "op": { "const": "wait" },
+            "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "set", "amount"],
+          "properties": {
+            "op": { "const": "gold" },
+            "set": { "enum": ["add", "sub"] },
+            "amount": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "item", "set", "count"],
+          "properties": {
+            "op": { "const": "item" },
+            "item": { "type": "string" },
+            "set": { "enum": ["add", "sub"] },
+            "count": { "type": "integer", "minimum": 1, "maximum": 99 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "name"],
+          "properties": {
+            "op": { "const": "se" },
+            "name": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+            "volume": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "pitch": { "type": "integer", "minimum": 50, "maximum": 150 }
+          }
+        },
+        { "type": "object", "additionalProperties": false, "required": ["op"], "properties": { "op": { "const": "erase" } } },
+        { "type": "object", "additionalProperties": false, "required": ["op"], "properties": { "op": { "const": "exit" } } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id"],
+          "properties": {
+            "op": { "const": "common" },
+            "id": { "type": "string" }
+          }
+        }
+      ]
+    },
+
+    "moveStep": {
+      "enum": [
+        "moveDown", "moveLeft", "moveRight", "moveUp",
+        "stepForward",
+        "faceDown", "faceLeft", "faceRight", "faceUp",
+        "wait", "turnRandom"
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "switch" },
+            "id": { "type": "string" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "op", "value"],
+          "properties": {
+            "kind": { "const": "variable" },
+            "id": { "type": "string" },
+            "op": { "enum": [">=", "<=", "==", "!="] },
+            "value": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "key"],
+          "properties": {
+            "kind": { "const": "selfSwitch" },
+            "key": { "enum": ["A", "B", "C", "D"] },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "count"],
+          "properties": {
+            "kind": { "const": "item" },
+            "id": { "type": "string" },
+            "count": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "amount"],
+          "properties": {
+            "kind": { "const": "gold" },
+            "amount": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "transferTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["map", "x", "y", "dir"],
+      "properties": {
+        "map": { "type": "string" },
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "dir": { "enum": ["down", "left", "right", "up"] }
+      }
+    },
+    "commonEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "trigger", "commands"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "name": { "type": "string" },
+        "trigger": { "enum": ["none", "parallel"] },
+        "conditionSwitch": { "type": "string" },
+        "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,237 @@
+// tests/engine.test.ts — unit tests for the pure-TS engine: camera reducer,
+// tile ids, tile/chunk constants, session start derivation, deepClone, and
+// conformance of the shipped example project to data/schema.json.
+// No host/framework imports here: these modules are pure TS and run under
+// plain bun.
+
+import { describe, expect, test } from "bun:test";
+import {
+  clampCamera,
+  initialCamera,
+  stepCamera,
+  VIEW_H,
+  VIEW_W,
+  BTN_BITS,
+  type CameraConfig,
+} from "../src/engine/camera.ts";
+import {
+  cellX,
+  cellY,
+  groundAt,
+  indexAt,
+  parseTileId,
+  TILE,
+  CHUNK_PX,
+  CHUNK_TILES,
+} from "../src/engine/tiles.ts";
+import { facingOfDir, startCamera } from "../src/engine/start.ts";
+import { buildMiniProject, buildMiniMap } from "../example/mini-project.ts";
+import { validateSchema, type VError } from "../src/engine/schema-validate.ts";
+import type { Project } from "../src/engine/types.ts";
+
+const CFG: CameraConfig = { worldW: 1024, worldH: 1024, speed: 2 };
+
+describe("camera reducer", () => {
+  test("moves 2px per held frame and emits the facing index", () => {
+    let s = initialCamera(200, 150, 0, CFG);
+    s = stepCamera(s, BTN_BITS.RIGHT, CFG);
+    expect(s).toEqual({ x: 202, y: 150, facing: 3 });
+    s = stepCamera(s, BTN_BITS.DOWN, CFG);
+    expect(s).toEqual({ x: 202, y: 152, facing: 0 });
+    s = stepCamera(s, BTN_BITS.LEFT, CFG);
+    expect(s.x).toBe(200);
+    expect(s.facing).toBe(1);
+    s = stepCamera(s, BTN_BITS.UP, CFG);
+    expect(s.y).toBe(150);
+    expect(s.facing).toBe(2);
+  });
+
+  test("holds position and facing with no buttons", () => {
+    const s0 = initialCamera(210, 160, 3, CFG);
+    const s1 = stepCamera(s0, 0, CFG);
+    expect(s1).toEqual(s0);
+  });
+
+  test("clamps at all four world edges", () => {
+    expect(clampCamera(-10, -10, CFG)).toEqual({ x: 0, y: 0 });
+    expect(clampCamera(5000, 5000, CFG)).toEqual({
+      x: CFG.worldW - VIEW_W,
+      y: CFG.worldH - VIEW_H,
+    });
+    const corner = stepCamera(
+      { x: CFG.worldW - VIEW_W, y: CFG.worldH - VIEW_H, facing: 0 },
+      BTN_BITS.RIGHT | BTN_BITS.DOWN,
+      CFG,
+    );
+    expect(corner.x).toBe(CFG.worldW - VIEW_W);
+    expect(corner.y).toBe(CFG.worldH - VIEW_H);
+  });
+
+  test("opposing directions cancel movement", () => {
+    const s = stepCamera({ x: 100, y: 100, facing: 0 }, BTN_BITS.LEFT | BTN_BITS.RIGHT, CFG);
+    expect(s.x).toBe(100);
+  });
+
+  test("vertical facing wins a diagonal hold (deterministic tie-break)", () => {
+    const s = stepCamera({ x: 100, y: 100, facing: 0 }, BTN_BITS.RIGHT | BTN_BITS.DOWN, CFG);
+    expect(s.facing).toBe(0);
+    const s2 = stepCamera({ x: 100, y: 100, facing: 0 }, BTN_BITS.RIGHT | BTN_BITS.UP, CFG);
+    expect(s2.facing).toBe(2);
+  });
+
+  test("is a pure fold: the input state is never mutated", () => {
+    const s0 = initialCamera(200, 150, 0, CFG);
+    const frozen = { ...s0 };
+    stepCamera(s0, BTN_BITS.RIGHT, CFG);
+    expect(s0).toEqual(frozen);
+  });
+
+  test("initialCamera clamps an out-of-range start", () => {
+    const s = initialCamera(9000, 9000, 0, CFG);
+    expect(s.x).toBe(CFG.worldW - VIEW_W);
+    expect(s.y).toBe(CFG.worldH - VIEW_H);
+  });
+});
+
+describe("tile and chunk constants", () => {
+  test("tiles are 16px and one chunk edge holds 32 of them in 512px", () => {
+    expect(TILE).toBe(16);
+    expect(CHUNK_PX).toBe(512);
+    expect(CHUNK_TILES).toBe(32);
+  });
+
+  test("parseTileId splits the sheet and cell", () => {
+    expect(parseTileId("town.43")).toEqual({ sheet: "town", cell: 43 });
+    expect(() => parseTileId("town.x")).toThrow();
+    expect(() => parseTileId("nolodash")).toThrow();
+  });
+
+  test("cellX/cellY and indexAt map between cell ids and grid positions", () => {
+    expect(cellX(15, 12)).toBe(3);
+    expect(cellY(15, 12)).toBe(1);
+    const m = buildMiniMap();
+    expect(indexAt(m, 2, 3)).toBe(3 * m.width + 2);
+    expect(groundAt(m, 10, 7)).toBe("town.41"); // the dirt road
+  });
+});
+
+describe("session start derives the camera placement", () => {
+  const world = { worldW: 1024, worldH: 1024 };
+
+  test("the example start tile (10,7) derives camera px (160,112) facing up", () => {
+    const project = buildMiniProject();
+    expect(startCamera(project.start, world)).toEqual({ x: 160, y: 112, facing: 2 });
+  });
+
+  test("every project dir maps to its reducer facing index", () => {
+    expect(facingOfDir("down")).toBe(0);
+    expect(facingOfDir("left")).toBe(1);
+    expect(facingOfDir("up")).toBe(2);
+    expect(facingOfDir("right")).toBe(3);
+  });
+
+  test("a start tile past the world edge clamps to the max camera position", () => {
+    const cam = startCamera({ map: "m", x: 9000, y: 9000, dir: "up" }, world);
+    expect(cam).toEqual({ x: 1024 - 480, y: 1024 - 272, facing: 2 });
+  });
+});
+
+describe("the example map", () => {
+  test("is deterministic: two builds are structurally identical", () => {
+    expect(buildMiniMap()).toEqual(buildMiniMap());
+  });
+
+  test("has the expected 20x12 shape with both layers populated", () => {
+    const m = buildMiniMap();
+    expect(m.width).toBe(20);
+    expect(m.height).toBe(12);
+    expect(m.ground).toHaveLength(240);
+    expect((m.upper ?? []).length).toBeGreaterThan(40);
+  });
+
+  test("every tile ref names the town sheet and a cell inside the 12x11 grid", () => {
+    const m = buildMiniMap();
+    const check = (ref: string | null) => {
+      if (ref === null) return;
+      const { sheet, cell } = parseTileId(ref);
+      expect(sheet).toBe("town");
+      expect(cellX(cell, 12)).toBeLessThan(12);
+      expect(cellY(cell, 12)).toBeLessThan(11);
+    };
+    for (const t of m.ground) check(t);
+    for (const [, t] of m.upper ?? []) check(t);
+  });
+
+  test("the perimeter carries upper-layer trees with matching block passage", () => {
+    const m = buildMiniMap();
+    const upperIdx = new Set((m.upper ?? []).map(([i]) => i));
+    expect(upperIdx.has(indexAt(m, 5, 0))).toBe(true);
+    expect(upperIdx.has(indexAt(m, 0, 5))).toBe(true);
+    expect(upperIdx.has(indexAt(m, 19, 8))).toBe(true);
+    const blocks = new Set((m.passage ?? []).filter(([, f]) => f === "block").map(([i]) => i));
+    expect(blocks.has(indexAt(m, 5, 0))).toBe(true);
+    expect(blocks.has(indexAt(m, 0, 5))).toBe(true);
+    // below-character event markers stay walkable (the star layer never
+    // collides by itself)
+    expect(blocks.has(indexAt(m, 10, 6))).toBe(false);
+    expect(blocks.has(indexAt(m, 15, 3))).toBe(false);
+  });
+
+  test("carries the four events at their authored cells", () => {
+    const m = buildMiniMap();
+    const byId = new Map((m.events ?? []).map((e) => [e.id, e]));
+    expect(byId.get("signpost")!.x).toBe(10);
+    expect(byId.get("signpost")!.y).toBe(6);
+    expect(byId.get("flowerbed")!.pages[0]!.trigger).toBe("playerTouch");
+    expect(byId.get("brook")!.pages[0]!.trigger).toBe("parallel");
+  });
+});
+
+describe("the example project conforms to data/schema.json", () => {
+  test("the generated v1 document passes the schema validator", async () => {
+    const schema = await Bun.file(new URL("../src/data/schema.json", import.meta.url)).json();
+    const errors: VError[] = validateSchema(schema, buildMiniProject() as unknown as Project);
+    expect(errors).toEqual([]);
+  });
+
+  test("the validator has teeth: a bad tile id and missing field fail", async () => {
+    const schema = await Bun.file(new URL("../src/data/schema.json", import.meta.url)).json();
+    const project = buildMiniProject();
+    const badTile = structuredClone(project) as Project;
+    (badTile.maps[0]!.ground as unknown[])[0] = "town.x";
+    expect(validateSchema(schema, badTile).length).toBeGreaterThan(0);
+    const noStart = structuredClone(project) as Partial<Project>;
+    delete noStart.start;
+    expect(validateSchema(schema, noStart).length).toBeGreaterThan(0);
+  });
+});
+
+// --- host-portable snapshot clone (desktop QuickJS has no structuredClone) -
+
+import { deepClone } from "../src/engine/clone.ts";
+
+describe("deepClone — reducer snapshot without structuredClone", () => {
+  test("detaches nested arrays/objects while preserving values", () => {
+    const src = { a: 1, b: [1, 2, { c: 3 }], d: { e: true } };
+    const out = deepClone(src);
+    expect(out).toEqual(src);
+    expect(out).not.toBe(src);
+    expect(out.b).not.toBe(src.b);
+    (out.b![2] as { c: number }).c = 99;
+    expect((src.b![2] as { c: number }).c).toBe(3);
+  });
+
+  test("preserves undefined-valued keys (a cleared self switch), like structuredClone", () => {
+    const src: Record<string, unknown> = { held: "A", cleared: undefined };
+    const out = deepClone(src);
+    expect(Object.prototype.hasOwnProperty.call(out, "cleared")).toBe(true);
+    expect(out.cleared).toBeUndefined();
+    expect(out.held).toBe("A");
+  });
+
+  test("passes through null and primitives", () => {
+    expect(deepClone(null)).toBeNull();
+    expect(deepClone(7)).toBe(7);
+    expect(deepClone("x")).toBe("x");
+  });
+});

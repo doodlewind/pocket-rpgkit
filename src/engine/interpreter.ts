@@ -1,0 +1,965 @@
+// src/engine/interpreter.ts — P1③ event interpreter.
+//
+// A pure fold over (state, input) per docs/SIMULATION.md: no wall clock, no
+// Math.random (the RNG cursor lives in state), no host imports. The host
+// calls stepInterp once per virtual frame with pressed-edge intents and the
+// player cell; the reducer owns page selection, trigger arbitration, the
+// command stack, the typewriter clock and every gameplay value.
+//
+// Fibers
+//   main       — at most one action / playerTouch / AUTORUN fiber. While it
+//                runs the game is "busy" (P1② freezes player movement, the
+//                UI freezes its camera) and no new blocking trigger starts.
+//   parallels  — PARALLEL pages run concurrently in their own fibers, in
+//                ascending event-key order so each frame is deterministic.
+//
+// A fiber runs a compiled linear program (compile()): `if/else` becomes
+// IF + JMP, a chosen choices branch or a common event pushes another program
+// on the frame stack. Suspending commands (text/choices/wait) pin the pc
+// until later-frame input releases them; transfer/moveRoute park the fiber
+// in "external" mode and publish a pending request P1④ completes with
+// continueExternal(). Parallel and autorun fibers restart one frame after
+// they finish (MV semantics): the victory autorun ends its loop by flipping
+// its self switch, which changes its active page.
+
+import { deepClone } from "./clone.ts";
+import type {
+  Command,
+  CommonEvent,
+  Condition,
+  Dir,
+  Facing,
+  GameEvent,
+  MapDef,
+  MoveRoute,
+  Page,
+} from "./types.ts";
+
+export const TICK_HZ = 60;
+
+/** Maximum number of instructions one fiber may execute inside a single
+ *  frame before it is declared non-terminating. Compiler-emitted programs
+ *  contain only forward control flow (compile()), so a legal fiber reaches
+ *  a wait/modal/external suspension or pops its stack within a bounded
+ *  number of steps. The limit is a runtime backstop for a cyclic program
+ *  that reached the state by another route (review 1274 B1): exceeding it
+ *  records a fatal error on the state instead of throwing, so a frame can
+ *  never hang the host frame loop. */
+export const RUNAWAY_STEP_LIMIT = 10000;
+
+// --- virtual time -----------------------------------------------------------
+
+export function secondsToFrames(seconds: number, hz = TICK_HZ): number {
+  return Math.max(0, Math.round(seconds * hz));
+}
+
+/** Characters revealed by frame `frame` (frames since revealStart) for a
+ *  line of `len` chars at `cps` chars per virtual second. Fractional chars
+ *  per frame accumulate, so authored cps is hz-portable: the same virtual
+ *  instant reveals the same text at 60/30/10/2 Hz (R2 acceptance table). */
+export function revealedChars(len: number, cps: number, frame: number, hz = TICK_HZ): number {
+  if (frame <= 0) return 0;
+  const cpf = cps / hz;
+  return Math.max(0, Math.min(len, Math.floor(cpf * frame)));
+}
+
+// --- seeded RNG: mulberry32, cursor is a serializable state field -----------
+
+export function rngNext(rngState: number): { value: number; next: number } {
+  let a = rngState >>> 0;
+  a = (a + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return { value: ((t ^ (t >>> 14)) >>> 0) / 4294967296, next: a >>> 0 };
+}
+
+export function randInt(rngState: number, min: number, max: number): { value: number; next: number } {
+  const r = rngNext(rngState);
+  return { value: min + Math.floor(r.value * (max - min + 1)), next: r.next };
+}
+
+// --- switch state (the saveable game values) --------------------------------
+
+export type SelfKey = "A" | "B" | "C" | "D";
+
+export interface SwitchState {
+  switches: Record<string, boolean>;
+  /** `${mapId}/${eventId}` -> held self switch (undefined = none). R2 v1
+   *  models one held key per event; the sample game uses only A. */
+  self: Record<string, SelfKey | undefined>;
+  items: Record<string, number>;
+  variables: Record<string, number>;
+  gold: number;
+  /** Mulberry32 cursor. Part of the save snapshot (R2 §3.1). */
+  rng: number;
+}
+
+export function createSwitchState(init?: Partial<SwitchState>): SwitchState {
+  return {
+    switches: {},
+    self: {},
+    items: {},
+    variables: {},
+    gold: 0,
+    rng: 0x12345678,
+    ...init,
+  };
+}
+
+// --- conditions and page selection ------------------------------------------
+
+export function evalCondition(c: Condition, s: SwitchState, eventKey: string): boolean {
+  switch (c.kind) {
+    case "switch":
+      return (s.switches[c.id] ?? false) === (c.value ?? true);
+    case "variable": {
+      const v = s.variables[c.id] ?? 0;
+      switch (c.op) {
+        case ">=": return v >= c.value;
+        case "<=": return v <= c.value;
+        case "==": return v === c.value;
+        case "!=": return v !== c.value;
+      }
+      return false;
+    }
+    case "selfSwitch":
+      return s.self[eventKey] === c.key;
+    case "item":
+      return (s.items[c.id] ?? 0) >= c.count;
+    case "gold":
+      return s.gold >= c.amount;
+  }
+}
+
+export function pageConditionHolds(p: Page, s: SwitchState, eventKey: string): boolean {
+  const c = p.condition;
+  if (!c) return true;
+  if (c.switch !== undefined && !(s.switches[c.switch] ?? false)) return false;
+  if (c.selfSwitch !== undefined && s.self[eventKey] !== c.selfSwitch) return false;
+  if (c.variable) {
+    const v = s.variables[c.variable.id] ?? 0;
+    const { op, value } = c.variable;
+    if (op === ">=" && !(v >= value)) return false;
+    if (op === "<=" && !(v <= value)) return false;
+    if (op === "==" && !(v === value)) return false;
+    if (op === "!=" && !(v !== value)) return false;
+  }
+  if (c.item !== undefined && (s.items[c.item] ?? 0) < 1) return false;
+  return true;
+}
+
+/** Highest-index page whose condition holds (R2 §2); null when none do. */
+export function activePage(
+  ev: GameEvent,
+  s: SwitchState,
+  mapId: string,
+): { page: Page; index: number } | null {
+  const key = eventKey(mapId, ev.id);
+  for (let i = ev.pages.length - 1; i >= 0; i--) {
+    if (pageConditionHolds(ev.pages[i]!, s, key)) return { page: ev.pages[i]!, index: i };
+  }
+  return null;
+}
+
+export function eventKey(mapId: string, eventId: string): string {
+  return `${mapId}/${eventId}`;
+}
+
+/** Explicit UTF-16 code-unit ordering for event ids. String.localeCompare is
+ *  host-locale dependent: Bun and the desktop QuickJS guest order "-" (U+002D)
+ *  and "_" (U+005F) differently, so the same JSON picked a different event on
+ *  the two hosts (review C12). Trigger arbitration must depend only on the
+ *  authored id bytes, never on the host's collation tables. */
+export function eventIdLess(a: string, b: string): boolean {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const ca = a.charCodeAt(i);
+    const cb = b.charCodeAt(i);
+    if (ca !== cb) return ca < cb;
+  }
+  return a.length < b.length;
+}
+
+// --- compiled programs -------------------------------------------------------
+
+export type Instr =
+  | { op: "text"; lines: string[]; cps: number }
+  | {
+      op: "choices";
+      prompt: string;
+      texts: string[];
+      branches: Prog[];
+      cancel: Prog | null;
+    }
+  | { op: "switch"; id: string; value: boolean }
+  | {
+      op: "variable";
+      id: string;
+      set:
+        | { op: "set" | "add" | "sub"; value: number }
+        | { op: "random"; min: number; max: number };
+    }
+  | { op: "selfSwitch"; key: SelfKey; value: boolean }
+  | { op: "if"; cond: Condition; onFalse: number }
+  | { op: "jmp"; to: number }
+  | { op: "wait"; frames: number }
+  | { op: "gold"; set: "add" | "sub"; amount: number }
+  | { op: "item"; item: string; set: "add" | "sub"; count: number }
+  | { op: "se"; name: string; volume: number; pitch: number }
+  | { op: "erase" }
+  | { op: "exit" }
+  | { op: "transfer"; map: string; x: number; y: number; dir: Dir | "keep"; fadeFrames: number }
+  | { op: "moveRoute"; target: "player" | "this"; wait: boolean; route: MoveRoute }
+  | { op: "common"; id: string };
+
+export type Prog = Instr[];
+
+const DEFAULT_CPS = 30;
+
+export function compile(cmds: readonly Command[], hz: number = TICK_HZ): Prog {
+  const out: Prog = [];
+  const emit = (ins: Instr): number => {
+    out.push(ins);
+    return out.length - 1;
+  };
+  const walk = (list: readonly Command[]): void => {
+    for (const c of list) {
+      switch (c.op) {
+        case "text":
+          emit({ op: "text", lines: c.lines, cps: c.cps ?? DEFAULT_CPS });
+          break;
+        case "choices":
+          emit({
+            op: "choices",
+            prompt: c.prompt,
+            texts: c.options.map((o) => o.text),
+            branches: c.options.map((o) => compile(o.commands, hz)),
+            cancel: c.cancel ? compile(c.cancel.commands, hz) : null,
+          });
+          break;
+        case "switch":
+          emit({ op: "switch", id: c.id, value: c.value });
+          break;
+        case "variable":
+          emit({ op: "variable", id: c.id, set: c.set });
+          break;
+        case "selfSwitch":
+          emit({ op: "selfSwitch", key: c.key, value: c.value });
+          break;
+        case "if": {
+          const at = out.length;
+          emit({ op: "if", cond: c.if, onFalse: -1 });
+          walk(c.then);
+          const jmpAt = emit({ op: "jmp", to: -1 });
+          const elseAt = out.length;
+          if (c.else) walk(c.else);
+          const endAt = out.length;
+          (out[at] as Extract<Instr, { op: "if" }>).onFalse = elseAt;
+          (out[jmpAt] as Extract<Instr, { op: "jmp" }>).to = endAt;
+          break;
+        }
+        case "wait":
+          emit({ op: "wait", frames: secondsToFrames(c.seconds, hz) });
+          break;
+        case "gold":
+          emit({ op: "gold", set: c.set, amount: c.amount });
+          break;
+        case "item":
+          emit({ op: "item", item: c.item, set: c.set, count: c.count });
+          break;
+        case "se":
+          emit({ op: "se", name: c.name, volume: c.volume ?? 80, pitch: c.pitch ?? 100 });
+          break;
+        case "erase":
+          emit({ op: "erase" });
+          break;
+        case "exit":
+          emit({ op: "exit" });
+          break;
+        case "transfer":
+          emit({
+            op: "transfer",
+            map: c.map,
+            x: c.x,
+            y: c.y,
+            dir: c.dir ?? "keep",
+            fadeFrames: secondsToFrames(c.fade ?? 0, hz),
+          });
+          break;
+        case "moveRoute":
+          emit({ op: "moveRoute", target: c.target, wait: c.wait ?? true, route: c.route });
+          break;
+        case "common":
+          emit({ op: "common", id: c.id });
+          break;
+      }
+    }
+  };
+  walk(cmds);
+  return out;
+}
+
+// --- runtime state -----------------------------------------------------------
+
+export interface Cell {
+  x: number;
+  y: number;
+}
+
+export interface InterpInput {
+  /** Pressed-edge intents for THIS frame (the host computes the edges). */
+  confirmEdge?: boolean;
+  cancelEdge?: boolean;
+  upEdge?: boolean;
+  downEdge?: boolean;
+  /** Player cell this frame and last frame (playerTouch fires on entry). */
+  playerCell: Cell;
+  prevCell: Cell;
+  /** 0 down, 1 left, 2 up, 3 right — action triggers fire one tile ahead. */
+  facing: Facing;
+  /** Live cells of map characters this frame (P1④ NPC motion); event id ->
+   *  cell. Events absent from the record stand on their authored x/y. */
+  eventCells?: Record<string, Cell>;
+}
+
+export interface TextModal {
+  kind: "text";
+  fiber: string;
+  lines: string[];
+  /** Joined text length (the UI renders lines joined with "\n"). */
+  total: number;
+  revealed: number;
+  /** True once the typewriter has caught up; confirm then closes the box. */
+  complete: boolean;
+}
+
+export interface ChoiceModal {
+  kind: "choices";
+  fiber: string;
+  prompt: string;
+  options: string[];
+  index: number;
+  cancellable: boolean;
+}
+
+export type Modal = TextModal | ChoiceModal;
+
+/** Did the VISIBLE modal identity/content change between two reducer
+ *  frames? The UI repaints the message layer only when this is true, so a
+ *  parked typewriter emits zero ops on idle frames. Comparing only kind and
+ *  fiber is not enough: two consecutive Show Choices run on the SAME fiber
+ *  (a nested choice opens right after its parent is picked), and the second
+ *  box has a different prompt, options and cancel permission. Those fields
+ *  must be part of the identity or Solid keeps the previous box on screen
+ *  and useActions never binds the newly-authored back action (review C07). */
+export function modalChanged(a: Modal | null, b: Modal | null): boolean {
+  if (a === b) return false;
+  if (a === null || b === null) return true;
+  if (a.kind !== b.kind || a.fiber !== b.fiber) return true;
+  if (a.kind === "text" && b.kind === "text") {
+    return (
+      a.revealed !== b.revealed ||
+      a.complete !== b.complete ||
+      a.lines.length !== b.lines.length ||
+      a.lines.some((line, i) => line !== b.lines[i])
+    );
+  }
+  if (a.kind === "choices" && b.kind === "choices") {
+    return (
+      a.index !== b.index ||
+      a.prompt !== b.prompt ||
+      a.cancellable !== b.cancellable ||
+      a.options.length !== b.options.length ||
+      a.options.some((opt, i) => opt !== b.options[i])
+    );
+  }
+  return false;
+}
+
+export interface SoundCue {
+  name: string;
+  volume: number;
+  pitch: number;
+}
+
+/** P1④ consumes these: the fiber is parked in "external" mode until
+ *  continueExternal() is called. P1③ publishes the payload only. */
+export interface PendingTransfer {
+  fiber: string;
+  map: string;
+  x: number;
+  y: number;
+  dir: Dir | "keep";
+  fadeFrames: number;
+}
+export interface PendingMoveRoute {
+  fiber: string;
+  target: "player" | "this";
+  eventId: string;
+  route: MoveRoute;
+  /** true: the fiber parked in "external" mode and the session resumes it
+   *  when the route lands; false: fire-and-forget, the fiber already
+   *  advanced past the command. */
+  wait: boolean;
+}
+
+interface Fiber {
+  key: string;
+  pageIndex: number;
+  parallel: boolean;
+  stack: { prog: Prog; pc: number }[];
+  mode: "run" | "text" | "choices" | "wait" | "external";
+  /** Frame on which the current wait/text started. */
+  since: number;
+  erase: boolean;
+}
+
+export interface World {
+  hz: number;
+  map: MapDef;
+  commonEvents: Map<string, CommonEvent>;
+}
+
+export interface InterpError {
+  kind: "runaway";
+  message: string;
+}
+
+export interface InterpState {
+  frame: number;
+  sw: SwitchState;
+  main: Fiber | null;
+  parallels: Record<string, Fiber>;
+  modal: Modal | null;
+  /** Erased event keys, for the rest of this map visit. */
+  erased: Record<string, true>;
+  /** playerTouch latches: set on entry, cleared once the player leaves. */
+  touched: Record<string, true>;
+  /** Sound cues emitted on this frame; the host drains them after step. */
+  cues: SoundCue[];
+  pendingTransfer: PendingTransfer | null;
+  /** Move routes published on THIS step, in command order. A fiber can
+   *  publish more than one before it parks (a fire-and-forget player turn
+   *  immediately followed by a waited self-route); the session drains all. */
+  pendingMoveRoutes: PendingMoveRoute[];
+  /** Keys of PARALLEL fibers canceled on THIS step because their page
+   *  stopped being the active page (condition failed, a higher page took
+   *  over, or the event was erased). A key parked in "external" mode names
+   *  a route the session must abort: a waited player route is dropped, and
+   *  the event-side route is torn down by the character page sync. */
+  abortedRoutes: string[];
+  /** Fatal interpreter error (review 1274 B1 backstop). Absent on a
+   *  healthy state (the key is not serialized, so legal save bytes are
+   *  unchanged). Once set, stepInterp freezes every fiber in place: the
+   *  host frame loop keeps returning instead of throwing frame after
+   *  frame, and the UI shows the message. A save carrying this field is
+   *  refused by the decoder (save-validate.ts). */
+  error?: InterpError;
+}
+
+export function createInterpState(sw: SwitchState = createSwitchState()): InterpState {
+  return {
+    frame: 0,
+    sw,
+    main: null,
+    parallels: {},
+    modal: null,
+    erased: {},
+    touched: {},
+    cues: [],
+    pendingTransfer: null,
+    pendingMoveRoutes: [],
+    abortedRoutes: [],
+  };
+}
+
+export function createWorld(map: MapDef, common: CommonEvent[] = [], hz: number = TICK_HZ): World {
+  return { hz, map, commonEvents: new Map(common.map((c) => [c.id, c])) };
+}
+
+/** True while the blocking interpreter owns the session: player movement
+ *  and free-scroll input freeze (a text/choices/wait/autorun fiber). */
+export function isBusy(_s: InterpState): boolean {
+  return _s.main !== null;
+}
+
+/** Deep-copy interpreter state without host built-ins. The desktop guest
+ *  runs on QuickJS, which has no structuredClone global; compiled programs
+ *  are immutable and shared, only the per-fiber pc cursor is copied. */
+export function cloneModal(m: Modal | null): Modal | null {
+  if (m === null) return null;
+  if (m.kind === "text") return { ...m, lines: [...m.lines] };
+  return { ...m, options: [...m.options] };
+}
+
+function cloneMoveRoute(route: MoveRoute): MoveRoute {
+  return { ...route, steps: [...route.steps] };
+}
+
+function cloneFiber(f: Fiber): Fiber {
+  return {
+    key: f.key,
+    pageIndex: f.pageIndex,
+    parallel: f.parallel,
+    stack: f.stack.map((frame) => ({ prog: frame.prog, pc: frame.pc })),
+    mode: f.mode,
+    since: f.since,
+    erase: f.erase,
+  };
+}
+
+export function cloneInterp(s0: InterpState): InterpState {
+  const main = s0.main ? cloneFiber(s0.main) : null;
+  const parallels: Record<string, Fiber> = {};
+  for (const key of Object.keys(s0.parallels)) parallels[key] = cloneFiber(s0.parallels[key]!);
+  const s: InterpState = {
+    frame: s0.frame,
+    sw: {
+      switches: { ...s0.sw.switches },
+      self: { ...s0.sw.self },
+      items: { ...s0.sw.items },
+      variables: { ...s0.sw.variables },
+      gold: s0.sw.gold,
+      rng: s0.sw.rng,
+    },
+    main,
+    parallels,
+    modal: cloneModal(s0.modal),
+    erased: { ...s0.erased },
+    touched: { ...s0.touched },
+    cues: s0.cues.map((cue) => ({ ...cue })),
+    pendingTransfer: s0.pendingTransfer ? { ...s0.pendingTransfer } : null,
+    pendingMoveRoutes: s0.pendingMoveRoutes.map((r) => ({
+      ...r,
+      route: cloneMoveRoute(r.route),
+    })),
+    abortedRoutes: [...s0.abortedRoutes],
+  };
+  if (s0.error) s.error = { ...s0.error };
+  return s;
+}
+
+
+// --- trigger arbitration ------------------------------------------------------
+
+const FRONT: Record<Facing, [number, number]> = {
+  0: [0, 1], // down
+  1: [-1, 0], // left
+  2: [0, -1], // up
+  3: [1, 0], // right
+};
+
+function at(a: Cell, c: Cell): boolean {
+  return a.x === c.x && a.y === c.y;
+}
+
+function startFiber(
+  s: InterpState,
+  key: string,
+  pageIndex: number,
+  page: Page,
+  parallel: boolean,
+  hz: number,
+): Fiber {
+  return {
+    key,
+    pageIndex,
+    parallel,
+    stack: [{ prog: compile(page.commands, hz), pc: 0 }],
+    mode: "run",
+    since: s.frame,
+    erase: false,
+  };
+}
+
+/** Page-scoped parallel lifecycle: a parallel fiber belongs to the page
+ *  that started it. When that page stops being active before the fiber
+ *  finishes — its condition fails, a higher-index page takes over, or the
+ *  event is erased — the fiber is canceled on the next frame. It does not
+ *  run to completion: a `wait` past the cancellation frame never applies.
+ *  A canceled fiber parked on an external route reports its key so the
+ *  session can abort the matching player/event move route. */
+function cancelStaleParallels(s: InterpState, w: World): void {
+  const events = w.map.events ?? [];
+  const byKey = new Map(events.map((ev) => [eventKey(w.map.id, ev.id), ev]));
+  for (const key of Object.keys(s.parallels)) {
+    const f = s.parallels[key]!;
+    const ev = byKey.get(key);
+    const active = ev && !s.erased[key] ? activePage(ev, s.sw, w.map.id) : null;
+    // Same page still active: keep running. A page change (index differs)
+    // cancels; scanTriggers restarts a fiber for the new page on this step.
+    if (active && active.index === f.pageIndex) continue;
+    if (f.mode === "external") s.abortedRoutes.push(f.key);
+    if (s.modal?.fiber === f.key) s.modal = null;
+    delete s.parallels[key];
+  }
+}
+
+function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
+  const events = w.map.events ?? [];
+  const cellOf = (ev: GameEvent): Cell => input.eventCells?.[ev.id] ?? ev;
+  // Release touch latches once the player has walked off the event cell.
+  for (const ev of events) {
+    const key = eventKey(w.map.id, ev.id);
+    if (!at(cellOf(ev), input.playerCell)) delete s.touched[key];
+  }
+  // Ascending event-id order so parallel starts and the blocking-fiber
+  // choice are deterministic across frames. The order is explicit UTF-16
+  // code units (eventIdLess), never localeCompare, whose collation differs
+  // between the Bun and QuickJS hosts (review C12).
+  for (const ev of [...events].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
+    const key = eventKey(w.map.id, ev.id);
+    if (s.erased[key]) continue;
+    const active = activePage(ev, s.sw, w.map.id);
+    if (!active) continue;
+    const { page, index } = active;
+    // A page with no commands has no fiber: an opened gate's touch page and
+    // a victory event's spent parallel page are inert markers, not
+    // per-frame start/finish spin.
+    if (page.commands.length === 0) continue;
+    if (page.trigger === "parallel") {
+      if (!s.parallels[key]) s.parallels[key] = startFiber(s, key, index, page, true, w.hz);
+      continue;
+    }
+    if (s.main) continue; // one blocking fiber at a time
+    const ec = cellOf(ev);
+    if (page.trigger === "autorun") {
+      s.main = startFiber(s, key, index, page, false, w.hz);
+    } else if (page.trigger === "action" && input.confirmEdge) {
+      // MV parity: action button starts the event one tile in FRONT of the
+      // player (NPCs block the tile; below-character signs are faced, not
+      // stood on) OR the event sharing the player's cell (a below-character
+      // plate the player walked onto). Live NPC cells come from the P1④
+      // motion reducer, so a wandering NPC is talkable wherever it stopped.
+      const [fx, fy] = FRONT[input.facing];
+      const front = { x: input.playerCell.x + fx, y: input.playerCell.y + fy };
+      if (at(ec, front) || at(ec, input.playerCell)) {
+        s.main = startFiber(s, key, index, page, false, w.hz);
+      }
+    } else if (page.trigger === "playerTouch") {
+      const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
+      if (at(ec, input.playerCell) && moved && !s.touched[key]) {
+        s.touched[key] = true;
+        s.main = startFiber(s, key, index, page, false, w.hz);
+      }
+    }
+  }
+}
+
+// --- fiber execution -----------------------------------------------------------
+
+type InstantInstr = Extract<
+  Instr,
+  | { op: "switch" }
+  | { op: "variable" }
+  | { op: "selfSwitch" }
+  | { op: "gold" }
+  | { op: "item" }
+  | { op: "se" }
+>;
+
+function runInstant(s: InterpState, f: Fiber, ins: InstantInstr): void {
+  switch (ins.op) {
+    case "switch":
+      s.sw.switches[ins.id] = ins.value;
+      break;
+    case "variable": {
+      if (ins.set.op === "random") {
+        const r = randInt(s.sw.rng, ins.set.min, ins.set.max);
+        s.sw.variables[ins.id] = r.value;
+        s.sw.rng = r.next;
+      } else {
+        const cur = s.sw.variables[ins.id] ?? 0;
+        s.sw.variables[ins.id] =
+          ins.set.op === "set" ? ins.set.value
+          : ins.set.op === "add" ? cur + ins.set.value
+          : cur - ins.set.value;
+      }
+      break;
+    }
+    case "selfSwitch":
+      s.sw.self[f.key] = ins.value ? ins.key : undefined;
+      break;
+    case "gold":
+      s.sw.gold += ins.set === "add" ? ins.amount : -ins.amount;
+      break;
+    case "item":
+      s.sw.items[ins.item] = (s.sw.items[ins.item] ?? 0) + (ins.set === "add" ? ins.count : -ins.count);
+      break;
+    case "se":
+      s.cues.push({ name: ins.name, volume: ins.volume, pitch: ins.pitch });
+      break;
+  }
+}
+
+function finishFiber(s: InterpState, f: Fiber): void {
+  if (f.erase) s.erased[f.key] = true;
+  if (s.modal?.fiber === f.key) s.modal = null;
+  if (f.parallel) delete s.parallels[f.key];
+  else if (s.main?.key === f.key) s.main = null;
+}
+
+function runFiber(s: InterpState, w: World, f: Fiber, input: InterpInput): void {
+  // Resolve already-suspending commands first; on resume the fiber falls
+  // through into the run loop so the instant commands after a wait/text/
+  // choice apply on the same frame the player released them.
+  if (f.mode === "wait") {
+    const top = f.stack[0]!;
+    const ins = top.prog[top.pc]! as Extract<Instr, { op: "wait" }>;
+    if (s.frame - f.since >= ins.frames) {
+      f.mode = "run";
+      top.pc++;
+    } else return;
+  }
+  if (f.mode === "text") {
+    const top = f.stack[0]!;
+    const ins = top.prog[top.pc]!;
+    if (ins.op === "text") {
+      if (s.modal && s.modal.fiber !== f.key) return; // another fiber's box
+      // The slot became free while this fiber parked waiting for it: the
+      // reveal clock starts on the install frame, not the wait frame, or a
+      // queued parallel line would dump its whole text at once (review C09).
+      if (!s.modal) f.since = s.frame;
+      const joined = ins.lines.join("\n");
+      // Once a confirm has skipped the typewriter (or it finished naturally)
+      // the box stays full: elapsed-time reveal must not shrink it again.
+      const wasComplete = s.modal?.kind === "text" && s.modal.complete;
+      const timed = wasComplete ? joined.length : revealedChars(joined.length, ins.cps, s.frame - f.since, w.hz);
+      if (input.confirmEdge && timed >= joined.length) {
+        s.modal = null;
+        f.mode = "run";
+        top.pc++;
+      } else {
+        const complete = input.confirmEdge || timed >= joined.length;
+        s.modal = {
+          kind: "text",
+          fiber: f.key,
+          lines: ins.lines,
+          total: joined.length,
+          revealed: complete ? joined.length : timed,
+          complete,
+        };
+        return;
+      }
+    } else {
+      f.mode = "run"; // modal slot was busy last frame; retry
+    }
+  }
+  if (f.mode === "choices") {
+    const top = f.stack[0]!;
+    const ins = top.prog[top.pc]!;
+    if (ins.op === "choices") {
+      if (s.modal && s.modal.fiber !== f.key) return;
+      // First frame after opening installs the modal; later frames keep the
+      // player's cursor index.
+      if (!s.modal || s.modal.kind !== "choices") {
+        s.modal = {
+          kind: "choices",
+          fiber: f.key,
+          prompt: ins.prompt,
+          options: ins.texts,
+          index: 0,
+          cancellable: ins.cancel !== null,
+        };
+      }
+      const modal = s.modal as ChoiceModal;
+      if (input.upEdge) modal.index = (modal.index + ins.texts.length - 1) % ins.texts.length;
+      if (input.downEdge) modal.index = (modal.index + 1) % ins.texts.length;
+      let branch: Prog | null = null;
+      if (input.confirmEdge) branch = ins.branches[modal.index]!;
+      else if (input.cancelEdge && ins.cancel) branch = ins.cancel;
+      if (branch) {
+        s.modal = null;
+        top.pc++; // past CHOICES in the parent
+        f.stack.unshift({ prog: branch, pc: 0 });
+        f.mode = "run"; // fall through: run the branch this frame
+      } else {
+        return;
+      }
+    } else {
+      f.mode = "run";
+    }
+  }
+
+  let guard = 0;
+  while (f.mode === "run") {
+    if (++guard > RUNAWAY_STEP_LIMIT) {
+      // Backstop (review 1274 B1): a non-terminating program records a
+      // fatal error on the state and parks the fiber instead of throwing
+      // through the host frame loop. stepInterp freezes on later frames.
+      s.error = { kind: "runaway", message: `interpreter: runaway program in ${f.key}` };
+      return;
+    }
+    const top = f.stack[0]!;
+    if (top.pc >= top.prog.length) {
+      f.stack.shift();
+      if (f.stack.length === 0) {
+        finishFiber(s, f);
+        return;
+      }
+      continue;
+    }
+    const ins = top.prog[top.pc]!;
+    switch (ins.op) {
+      case "if":
+        top.pc = evalCondition(ins.cond, s.sw, f.key) ? top.pc + 1 : ins.onFalse;
+        break;
+      case "jmp":
+        top.pc = ins.to;
+        break;
+      case "switch":
+      case "variable":
+      case "selfSwitch":
+      case "gold":
+      case "item":
+      case "se":
+        runInstant(s, f, ins);
+        top.pc++;
+        break;
+      case "erase":
+        f.erase = true;
+        finishFiber(s, f);
+        return;
+      case "exit":
+        finishFiber(s, f);
+        return;
+      case "wait":
+        if (ins.frames <= 0) {
+          top.pc++;
+          break;
+        }
+        f.mode = "wait";
+        f.since = s.frame;
+        return;
+      case "text":
+        // The modal slot is a single shared resource: a PARALLEL line must
+        // wait behind an open main-fiber dialog instead of overwriting it
+        // (review C09). Stay in "run" mode and retry next frame without
+        // advancing the pc or starting the reveal clock.
+        if (s.modal) return;
+        f.mode = "text";
+        f.since = s.frame;
+        s.modal = {
+          kind: "text",
+          fiber: f.key,
+          lines: ins.lines,
+          total: ins.lines.join("\n").length,
+          revealed: 0,
+          complete: false,
+        };
+        return;
+      case "choices":
+        // Same single-slot rule for the choices box.
+        if (s.modal) return;
+        f.mode = "choices";
+        s.modal = {
+          kind: "choices",
+          fiber: f.key,
+          prompt: ins.prompt,
+          options: ins.texts,
+          index: 0,
+          cancellable: ins.cancel !== null,
+        };
+        return;
+      case "transfer":
+        f.mode = "external";
+        s.pendingTransfer = {
+          fiber: f.key,
+          map: ins.map,
+          x: ins.x,
+          y: ins.y,
+          dir: ins.dir,
+          fadeFrames: ins.fadeFrames,
+        };
+        return;
+      case "moveRoute":
+        if (!ins.wait) {
+          // Fire-and-forget route: P1④ walks it, this fiber continues now.
+          s.pendingMoveRoutes.push({
+            fiber: f.key,
+            target: ins.target,
+            eventId: f.key.split("/").pop()!,
+            route: ins.route,
+            wait: false,
+          });
+          top.pc++;
+          break;
+        }
+        f.mode = "external";
+        s.pendingMoveRoutes.push({
+          fiber: f.key,
+          target: ins.target,
+          eventId: f.key.split("/").pop()!,
+          route: ins.route,
+          wait: true,
+        });
+        return;
+      case "common": {
+        const common = w.commonEvents.get(ins.id);
+        if (!common) {
+          top.pc++; // unknown common event: no-op (MV logs and skips)
+          break;
+        }
+        top.pc++;
+        f.stack.unshift({ prog: compile(common.commands, w.hz), pc: 0 });
+        break;
+      }
+    }
+  }
+}
+
+/** One virtual frame. Returns a NEW state; the input state is not mutated. */
+export function stepInterp(w: World, s0: InterpState, input: InterpInput): InterpState {
+  // A fatalized state is frozen: no triggers scan, no fiber advances. The
+  // frame clock still ticks so render/host code keeps its cadence, but the
+  // cyclic program can never consume another step (review 1274 B1).
+  if (s0.error) {
+    const frozen = deepClone(s0);
+    frozen.frame = s0.frame + 1;
+    frozen.cues = [];
+    return frozen;
+  }
+  const s: InterpState = deepClone(s0);
+  s.frame = s0.frame + 1;
+  s.cues = [];
+  // Pending requests live only on the step that issued them: P1④ reads them
+  // off that step, performs the work, then calls continueExternal().
+  s.pendingTransfer = null;
+  s.pendingMoveRoutes = [];
+  s.abortedRoutes = [];
+
+  cancelStaleParallels(s, w);
+  scanTriggers(s, w, input);
+
+  // Parallels first (ascending key), then the blocking fiber, so a parallel
+  // can never observe a value the main fiber sets later in the same frame.
+  for (const key of Object.keys(s.parallels).sort()) {
+    runFiber(s, w, s.parallels[key]!, input);
+    if (s.error) return s;
+  }
+  if (s.main) runFiber(s, w, s.main, input);
+  return s;
+}
+
+/** P1④ entry point: resume a fiber parked on transfer/moveRoute after the
+ *  external work (map swap, route walk) has completed. */
+export function continueExternal(s0: InterpState, fiberKey: string): InterpState {
+  const s = deepClone(s0);
+  const resume = (f: Fiber | null): void => {
+    if (!f || f.key !== fiberKey || f.mode !== "external") return;
+    f.stack[0]!.pc++;
+    f.mode = "run";
+  };
+  resume(s.main);
+  for (const f of Object.values(s.parallels)) resume(f);
+  return s;
+}
+
+/** True when the fiber is parked in "external" mode (a wait:true route or
+ *  a transfer): the session completes the work before resuming it. A
+ *  wait:false moveRoute publishes the same payload but the fiber already
+ *  advanced, so the session treats the route as fire-and-forget. */
+export function fiberIsExternal(s: InterpState, fiberKey: string): boolean {
+  if (s.main?.key === fiberKey) return s.main.mode === "external";
+  return Object.values(s.parallels).some((f) => f.key === fiberKey && f.mode === "external");
+}

@@ -1,0 +1,22 @@
+// src/engine/index.ts — public surface of the Pocket RPG Kit runtime.
+//
+// Every module here is pure TypeScript: no host imports, no wall clock, no
+// Math.random (the RNG cursor is a state field). A session is one pure fold
+// per virtual frame, so a tape replays byte-for-byte on every host.
+
+export * from "./types.ts";
+export * from "./clone.ts";
+export * from "./tiles.ts";
+export * from "./camera.ts";
+export * from "./viewport.ts";
+export * from "./start.ts";
+export * from "./passability.ts";
+export * from "./movement.ts";
+export * from "./interpreter.ts";
+export * from "./chars.ts";
+export * from "./session.ts";
+export * from "./schema-validate.ts";
+export * from "./save.ts";
+export * from "./save-validate.ts";
+export * from "./save-restore.ts";
+export * from "./save-menu.ts";

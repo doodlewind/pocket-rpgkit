@@ -1,0 +1,36 @@
+{
+  "name": "pocket-rpgkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Reusable 2D tile-RPG runtime and rpgkit-project/v1 format for PocketJS",
+  "exports": {
+    ".": "./src/index.ts",
+    "./engine": "./src/engine/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./host": "./src/host/index.ts",
+    "./schema": "./src/data/schema.json"
+  },
+  "workspaces": [
+    "vendor/pocketjs"
+  ],
+  "scripts": {
+    "setup": "git submodule update --init && bun install",
+    "test": "bun test tests/",
+    "tsc": "bunx tsc --noEmit",
+    "gen-assets": "bun tools/gen-assets.ts",
+    "build:example": "bun tools/build-example.ts",
+    "build:wasm": "bun vendor/pocketjs/tools/wasm.ts",
+    "check": "bun test && bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@vue-jsx-vapor/runtime": "3.2.19",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@pocketjs/framework": "workspace:*",
+    "solid-js": "^1.9"
+  }
+}

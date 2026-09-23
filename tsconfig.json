@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "types": ["bun"],
+    "strict": true,
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "preserve",
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      "pocket-rpgkit": ["./src/index.ts"],
+      "pocket-rpgkit/engine": ["./src/engine/index.ts"],
+      "pocket-rpgkit/ui": ["./src/ui/index.ts"],
+      "pocket-rpgkit/host": ["./src/host/index.ts"]
+    }
+  },
+  "include": [
+    "src",
+    "tools",
+    "tests",
+    "example",
+    "vendor/pocketjs/framework/src",
+    "vendor/pocketjs/contracts/spec"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "vendor/pocketjs/framework/compiler",
+    "vendor/pocketjs/framework/src/service-client.ts",
+    "vendor/pocketjs/framework/src/media-service.ts",
+    "vendor/pocketjs/site",
+    "vendor/pocketjs/apps",
+    "vendor/pocketjs/hosts",
+    "vendor/pocketjs/tests",
+    "vendor/pocketjs/tools"
+  ]
+}

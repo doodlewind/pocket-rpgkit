@@ -1,0 +1,9 @@
+node_modules/
+dist/
+
+# Bun / editor noise
+.DS_Store
+*.swp
+
+# The PocketJS submodule builds its wasm backend into its own gitignored
+# hosts/web/pocketjs.wasm; ignore any stray build receipt here too.
