@@ -1,0 +1,4245 @@
+{
+  "format": "rpgkit-project/v1",
+  "title": "The Sunstone of Bramble Hollow",
+  "tileSize": 16,
+  "start": {
+    "map": "village",
+    "x": 9,
+    "y": 9,
+    "dir": "up"
+  },
+  "initialGold": 5,
+  "sheets": [
+    {
+      "id": "town",
+      "cols": 12,
+      "rows": 11,
+      "pak": "chunks"
+    },
+    {
+      "id": "dun",
+      "cols": 12,
+      "rows": 11,
+      "pak": "chunks",
+      "defaultPassage": "block",
+      "pass": [
+        24,
+        25,
+        30,
+        42,
+        48,
+        50,
+        52
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "thorn-key",
+      "name": "Iron Key",
+      "sprite": "town.108"
+    },
+    {
+      "id": "torch",
+      "name": "Torch",
+      "sprite": "town.109",
+      "usable": true
+    },
+    {
+      "id": "sunstone",
+      "name": "Sunstone",
+      "sprite": "town.110"
+    }
+  ],
+  "sprites": {
+    "wiz": {
+      "kind": "image",
+      "src": "assets/npc/wiz.png"
+    },
+    "boy": {
+      "kind": "image",
+      "src": "assets/npc/boy.png"
+    },
+    "merchant": {
+      "kind": "image",
+      "src": "assets/npc/merchant.png"
+    },
+    "villager": {
+      "kind": "image",
+      "src": "assets/npc/villager.png"
+    },
+    "slime": {
+      "kind": "image",
+      "src": "assets/npc/slime.png"
+    },
+    "bat": {
+      "kind": "image",
+      "src": "assets/npc/bat.png"
+    },
+    "chest-closed": {
+      "kind": "image",
+      "src": "assets/npc/chest-a.png"
+    },
+    "chest-open": {
+      "kind": "image",
+      "src": "assets/npc/chest-b.png"
+    },
+    "chest-relic": {
+      "kind": "image",
+      "src": "assets/npc/chest-c.png"
+    },
+    "thorn": {
+      "kind": "image",
+      "src": "assets/npc/thorn.png"
+    },
+    "irongate": {
+      "kind": "image",
+      "src": "assets/npc/irongate.png"
+    },
+    "runestone": {
+      "kind": "image",
+      "src": "assets/npc/runestone.png"
+    },
+    "runestone-lit": {
+      "kind": "image",
+      "src": "assets/npc/runestone-lit.png"
+    }
+  },
+  "maps": [
+    {
+      "id": "village",
+      "name": "Bramble Hollow",
+      "width": 20,
+      "height": 13,
+      "sheets": [
+        "town"
+      ],
+      "ground": [
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.42",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.88",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.39",
+        "town.40",
+        "town.41",
+        "town.42",
+        "town.39",
+        "town.40",
+        "town.41",
+        "town.42",
+        "town.43",
+        "town.40",
+        "town.43",
+        "town.43",
+        "town.39",
+        "town.40",
+        "town.41",
+        "town.42",
+        "town.39",
+        "town.40",
+        "town.41",
+        "town.42",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.43",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.1",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0"
+      ],
+      "events": [
+        {
+          "id": "elder",
+          "name": "Village Elder",
+          "x": 9,
+          "y": 5,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "wiz",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "ELDER: The Sunstone that lit our valley",
+                    "was taken into the cave beyond the wood.",
+                    "Thorns seal the forest path. Take the key",
+                    "from the village chest, hero."
+                  ]
+                },
+                {
+                  "op": "choices",
+                  "prompt": "Ask about the road ahead?",
+                  "options": [
+                    {
+                      "text": "The forest?",
+                      "commands": [
+                        {
+                          "op": "text",
+                          "lines": [
+                            "ELDER: A rune stone sleeps among the trees.",
+                            "Touch it, and the cave gate will know you."
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "text": "Farewell",
+                      "commands": [
+                        {
+                          "op": "text",
+                          "lines": [
+                            "ELDER: Walk tall. The hollow believes in you."
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "merchant",
+          "name": "Traveling Merchant",
+          "x": 11,
+          "y": 5,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "merchant",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "MERCHANT: Wares for the bold! One torch,",
+                    "ten coin. It is dark past the thorns."
+                  ]
+                },
+                {
+                  "op": "choices",
+                  "prompt": "Buy a torch for 10 gold?",
+                  "options": [
+                    {
+                      "text": "Buy torch",
+                      "commands": [
+                        {
+                          "op": "if",
+                          "if": {
+                            "kind": "gold",
+                            "amount": 10
+                          },
+                          "then": [
+                            {
+                              "op": "gold",
+                              "set": "sub",
+                              "amount": 10
+                            },
+                            {
+                              "op": "item",
+                              "item": "torch",
+                              "set": "add",
+                              "count": 1
+                            },
+                            {
+                              "op": "text",
+                              "lines": [
+                                "MERCHANT: A deal well struck. Mind the drip",
+                                "in the cave — it is never water."
+                              ]
+                            }
+                          ],
+                          "else": [
+                            {
+                              "op": "text",
+                              "lines": [
+                                "MERCHANT: Your purse is lighter than air.",
+                                "The old chest by the gate has coin."
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "text": "Not now",
+                      "commands": [
+                        {
+                          "op": "text",
+                          "lines": [
+                            "MERCHANT: I will be here. Stone endures."
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sign",
+          "name": "Village Sign",
+          "x": 13,
+          "y": 7,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "<Bramble Hollow>",
+                    "North: Whispering Wood.",
+                    "Do not feed the bats."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "boy",
+          "name": "Curious Boy",
+          "x": 7,
+          "y": 9,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "boy",
+              "blocks": true,
+              "moveType": "random",
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "BOY: The slimes in the cave only move",
+                    "when you are not looking. Probably."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "guard",
+          "name": "Off-duty Guard",
+          "x": 3,
+          "y": 7,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "villager",
+              "blocks": true,
+              "moveRoute": {
+                "repeat": true,
+                "skippable": false,
+                "steps": [
+                  "moveRight",
+                  "moveRight",
+                  "wait",
+                  "faceUp",
+                  "wait",
+                  "moveLeft",
+                  "moveLeft",
+                  "faceDown"
+                ]
+              },
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "GUARD: Patrol duty. Two steps right, two",
+                    "back. I have memorized every pebble."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "curious-slime",
+          "name": "Curious Slime",
+          "x": 3,
+          "y": 10,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "slime",
+              "blocks": true,
+              "moveType": "approach",
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "The slime bobs eagerly, as if asking",
+                    "to come along. It cannot."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "porter",
+          "name": "Station Porter",
+          "x": 12,
+          "y": 11,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "merchant",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "PORTER: Eyes front, hero. Watch my step."
+                  ]
+                },
+                {
+                  "op": "moveRoute",
+                  "target": "player",
+                  "wait": false,
+                  "route": {
+                    "steps": [
+                      "faceUp"
+                    ],
+                    "repeat": false,
+                    "skippable": false
+                  }
+                },
+                {
+                  "op": "moveRoute",
+                  "target": "this",
+                  "wait": true,
+                  "route": {
+                    "steps": [
+                      "moveRight",
+                      "moveRight",
+                      "wait",
+                      "moveLeft",
+                      "moveLeft"
+                    ],
+                    "repeat": false,
+                    "skippable": false
+                  }
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "PORTER: Two east, two west. Back at post."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "village-chest",
+          "name": "Village Chest",
+          "x": 17,
+          "y": 3,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "chest-closed",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "gold",
+                  "set": "add",
+                  "amount": 25
+                },
+                {
+                  "op": "item",
+                  "item": "thorn-key",
+                  "set": "add",
+                  "count": 1
+                },
+                {
+                  "op": "selfSwitch",
+                  "key": "A",
+                  "value": true
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "Found 25 gold and an IRON KEY.",
+                    "Its teeth are shaped like brambles."
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "action",
+              "sprite": "chest-open",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "The chest is empty. Your chest, however,",
+                    "is full of purpose."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "north-gate",
+          "name": "Path to the Wood",
+          "x": 9,
+          "y": 0,
+          "pages": [
+            {
+              "trigger": "playerTouch",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "transfer",
+                  "map": "forest",
+                  "x": 10,
+                  "y": 13,
+                  "dir": "up"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "upper": [
+        [
+          130,
+          "town.104"
+        ],
+        [
+          0,
+          "town.3"
+        ],
+        [
+          240,
+          "town.17"
+        ],
+        [
+          1,
+          "town.4"
+        ],
+        [
+          241,
+          "town.29"
+        ],
+        [
+          2,
+          "town.17"
+        ],
+        [
+          242,
+          "town.30"
+        ],
+        [
+          3,
+          "town.29"
+        ],
+        [
+          243,
+          "town.3"
+        ],
+        [
+          4,
+          "town.30"
+        ],
+        [
+          244,
+          "town.4"
+        ],
+        [
+          5,
+          "town.3"
+        ],
+        [
+          245,
+          "town.3"
+        ],
+        [
+          6,
+          "town.4"
+        ],
+        [
+          246,
+          "town.4"
+        ],
+        [
+          7,
+          "town.3"
+        ],
+        [
+          247,
+          "town.17"
+        ],
+        [
+          8,
+          "town.4"
+        ],
+        [
+          248,
+          "town.29"
+        ],
+        [
+          249,
+          "town.30"
+        ],
+        [
+          10,
+          "town.29"
+        ],
+        [
+          250,
+          "town.3"
+        ],
+        [
+          11,
+          "town.30"
+        ],
+        [
+          251,
+          "town.4"
+        ],
+        [
+          12,
+          "town.3"
+        ],
+        [
+          252,
+          "town.3"
+        ],
+        [
+          13,
+          "town.4"
+        ],
+        [
+          253,
+          "town.4"
+        ],
+        [
+          14,
+          "town.3"
+        ],
+        [
+          254,
+          "town.17"
+        ],
+        [
+          15,
+          "town.4"
+        ],
+        [
+          255,
+          "town.29"
+        ],
+        [
+          16,
+          "town.17"
+        ],
+        [
+          256,
+          "town.30"
+        ],
+        [
+          17,
+          "town.29"
+        ],
+        [
+          257,
+          "town.3"
+        ],
+        [
+          18,
+          "town.30"
+        ],
+        [
+          258,
+          "town.4"
+        ],
+        [
+          19,
+          "town.3"
+        ],
+        [
+          259,
+          "town.3"
+        ],
+        [
+          20,
+          "town.4"
+        ],
+        [
+          39,
+          "town.30"
+        ],
+        [
+          40,
+          "town.17"
+        ],
+        [
+          59,
+          "town.3"
+        ],
+        [
+          60,
+          "town.29"
+        ],
+        [
+          79,
+          "town.4"
+        ],
+        [
+          80,
+          "town.30"
+        ],
+        [
+          99,
+          "town.3"
+        ],
+        [
+          100,
+          "town.3"
+        ],
+        [
+          119,
+          "town.4"
+        ],
+        [
+          120,
+          "town.4"
+        ],
+        [
+          139,
+          "town.17"
+        ],
+        [
+          140,
+          "town.3"
+        ],
+        [
+          159,
+          "town.29"
+        ],
+        [
+          160,
+          "town.4"
+        ],
+        [
+          179,
+          "town.30"
+        ],
+        [
+          180,
+          "town.17"
+        ],
+        [
+          199,
+          "town.3"
+        ],
+        [
+          200,
+          "town.29"
+        ],
+        [
+          219,
+          "town.4"
+        ],
+        [
+          220,
+          "town.30"
+        ],
+        [
+          239,
+          "town.3"
+        ],
+        [
+          42,
+          "town.70"
+        ],
+        [
+          102,
+          "town.68"
+        ],
+        [
+          43,
+          "town.70"
+        ],
+        [
+          103,
+          "town.68"
+        ],
+        [
+          44,
+          "town.70"
+        ],
+        [
+          104,
+          "town.68"
+        ],
+        [
+          45,
+          "town.70"
+        ],
+        [
+          105,
+          "town.68"
+        ],
+        [
+          46,
+          "town.70"
+        ],
+        [
+          106,
+          "town.68"
+        ],
+        [
+          62,
+          "town.69"
+        ],
+        [
+          66,
+          "town.71"
+        ],
+        [
+          82,
+          "town.69"
+        ],
+        [
+          86,
+          "town.71"
+        ],
+        [
+          104,
+          "town.85"
+        ],
+        [
+          63,
+          "town.29"
+        ],
+        [
+          85,
+          "town.17"
+        ],
+        [
+          54,
+          "town.44"
+        ],
+        [
+          55,
+          "town.44"
+        ],
+        [
+          56,
+          "town.44"
+        ],
+        [
+          57,
+          "town.44"
+        ],
+        [
+          58,
+          "town.44"
+        ],
+        [
+          114,
+          "town.44"
+        ],
+        [
+          115,
+          "town.44"
+        ],
+        [
+          117,
+          "town.44"
+        ],
+        [
+          118,
+          "town.44"
+        ],
+        [
+          74,
+          "town.46"
+        ],
+        [
+          78,
+          "town.47"
+        ],
+        [
+          94,
+          "town.46"
+        ],
+        [
+          98,
+          "town.47"
+        ],
+        [
+          75,
+          "town.93"
+        ],
+        [
+          183,
+          "town.29"
+        ],
+        [
+          216,
+          "town.17"
+        ],
+        [
+          72,
+          "town.3"
+        ],
+        [
+          53,
+          "town.4"
+        ],
+        [
+          192,
+          "town.30"
+        ],
+        [
+          153,
+          "town.83"
+        ]
+      ],
+      "passage": [
+        [
+          0,
+          "block"
+        ],
+        [
+          1,
+          "block"
+        ],
+        [
+          2,
+          "block"
+        ],
+        [
+          3,
+          "block"
+        ],
+        [
+          4,
+          "block"
+        ],
+        [
+          5,
+          "block"
+        ],
+        [
+          6,
+          "block"
+        ],
+        [
+          7,
+          "block"
+        ],
+        [
+          8,
+          "block"
+        ],
+        [
+          10,
+          "block"
+        ],
+        [
+          11,
+          "block"
+        ],
+        [
+          12,
+          "block"
+        ],
+        [
+          13,
+          "block"
+        ],
+        [
+          14,
+          "block"
+        ],
+        [
+          15,
+          "block"
+        ],
+        [
+          16,
+          "block"
+        ],
+        [
+          17,
+          "block"
+        ],
+        [
+          18,
+          "block"
+        ],
+        [
+          19,
+          "block"
+        ],
+        [
+          20,
+          "block"
+        ],
+        [
+          39,
+          "block"
+        ],
+        [
+          40,
+          "block"
+        ],
+        [
+          42,
+          "block"
+        ],
+        [
+          43,
+          "block"
+        ],
+        [
+          44,
+          "block"
+        ],
+        [
+          45,
+          "block"
+        ],
+        [
+          46,
+          "block"
+        ],
+        [
+          53,
+          "block"
+        ],
+        [
+          54,
+          "block"
+        ],
+        [
+          55,
+          "block"
+        ],
+        [
+          56,
+          "block"
+        ],
+        [
+          57,
+          "block"
+        ],
+        [
+          58,
+          "block"
+        ],
+        [
+          59,
+          "block"
+        ],
+        [
+          60,
+          "block"
+        ],
+        [
+          62,
+          "block"
+        ],
+        [
+          66,
+          "block"
+        ],
+        [
+          72,
+          "block"
+        ],
+        [
+          74,
+          "block"
+        ],
+        [
+          78,
+          "block"
+        ],
+        [
+          79,
+          "block"
+        ],
+        [
+          80,
+          "block"
+        ],
+        [
+          82,
+          "block"
+        ],
+        [
+          86,
+          "block"
+        ],
+        [
+          94,
+          "block"
+        ],
+        [
+          98,
+          "block"
+        ],
+        [
+          99,
+          "block"
+        ],
+        [
+          100,
+          "block"
+        ],
+        [
+          102,
+          "block"
+        ],
+        [
+          103,
+          "block"
+        ],
+        [
+          104,
+          "block"
+        ],
+        [
+          105,
+          "block"
+        ],
+        [
+          106,
+          "block"
+        ],
+        [
+          114,
+          "block"
+        ],
+        [
+          115,
+          "block"
+        ],
+        [
+          117,
+          "block"
+        ],
+        [
+          118,
+          "block"
+        ],
+        [
+          119,
+          "block"
+        ],
+        [
+          120,
+          "block"
+        ],
+        [
+          130,
+          "block"
+        ],
+        [
+          139,
+          "block"
+        ],
+        [
+          140,
+          "block"
+        ],
+        [
+          153,
+          "block"
+        ],
+        [
+          159,
+          "block"
+        ],
+        [
+          160,
+          "block"
+        ],
+        [
+          179,
+          "block"
+        ],
+        [
+          180,
+          "block"
+        ],
+        [
+          192,
+          "block"
+        ],
+        [
+          199,
+          "block"
+        ],
+        [
+          200,
+          "block"
+        ],
+        [
+          219,
+          "block"
+        ],
+        [
+          220,
+          "block"
+        ],
+        [
+          239,
+          "block"
+        ],
+        [
+          240,
+          "block"
+        ],
+        [
+          241,
+          "block"
+        ],
+        [
+          242,
+          "block"
+        ],
+        [
+          243,
+          "block"
+        ],
+        [
+          244,
+          "block"
+        ],
+        [
+          245,
+          "block"
+        ],
+        [
+          246,
+          "block"
+        ],
+        [
+          247,
+          "block"
+        ],
+        [
+          248,
+          "block"
+        ],
+        [
+          249,
+          "block"
+        ],
+        [
+          250,
+          "block"
+        ],
+        [
+          251,
+          "block"
+        ],
+        [
+          252,
+          "block"
+        ],
+        [
+          253,
+          "block"
+        ],
+        [
+          254,
+          "block"
+        ],
+        [
+          255,
+          "block"
+        ],
+        [
+          256,
+          "block"
+        ],
+        [
+          257,
+          "block"
+        ],
+        [
+          258,
+          "block"
+        ],
+        [
+          259,
+          "block"
+        ]
+      ]
+    },
+    {
+      "id": "forest",
+      "name": "Whispering Wood",
+      "width": 18,
+      "height": 14,
+      "sheets": [
+        "town"
+      ],
+      "ground": [
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.41",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.42",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.40",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0",
+        "town.0"
+      ],
+      "events": [
+        {
+          "id": "forest-return",
+          "name": "Path to Village",
+          "x": 9,
+          "y": 13,
+          "pages": [
+            {
+              "trigger": "playerTouch",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "transfer",
+                  "map": "village",
+                  "x": 9,
+                  "y": 1,
+                  "dir": "down"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "thorn-gate",
+          "name": "Wall of Thorns",
+          "x": 9,
+          "y": 0,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "thorn",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "if",
+                  "if": {
+                    "kind": "item",
+                    "id": "thorn-key",
+                    "count": 1
+                  },
+                  "then": [
+                    {
+                      "op": "se",
+                      "name": "unlock"
+                    },
+                    {
+                      "op": "selfSwitch",
+                      "key": "A",
+                      "value": true
+                    },
+                    {
+                      "op": "text",
+                      "lines": [
+                        "The iron key bites. The thorns part",
+                        "with a sound like tearing silk."
+                      ]
+                    },
+                    {
+                      "op": "transfer",
+                      "map": "cave",
+                      "x": 9,
+                      "y": 11,
+                      "dir": "up",
+                      "fade": 0.4
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "text",
+                      "lines": [
+                        "Living thorns seal the path north.",
+                        "A key shaped like brambles would open them."
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "playerTouch",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "transfer",
+                  "map": "cave",
+                  "x": 9,
+                  "y": 11,
+                  "dir": "up",
+                  "fade": 0.4
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fairy",
+          "name": "Wood Sprite",
+          "x": 6,
+          "y": 6,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "slime",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "SPRITE: The cave remembers every footstep.",
+                    "Wake the rune stone east of here, and",
+                    "its iron gate will unclench."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "forest-chest",
+          "name": "Mossy Chest",
+          "x": 6,
+          "y": 8,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "chest-closed",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "gold",
+                  "set": "add",
+                  "amount": 15
+                },
+                {
+                  "op": "selfSwitch",
+                  "key": "A",
+                  "value": true
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "Moss showers off the lid. Found 15 gold."
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "action",
+              "sprite": "chest-open",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "Only moss and one disappointed spider."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "rune-stone",
+          "name": "Rune Stone",
+          "x": 9,
+          "y": 4,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "runestone",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "se",
+                  "name": "chime"
+                },
+                {
+                  "op": "switch",
+                  "id": "rune-lit",
+                  "value": true
+                },
+                {
+                  "op": "selfSwitch",
+                  "key": "A",
+                  "value": true
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "You lay your palm on the stone.",
+                    "A cold blue light answers, and holds."
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "action",
+              "sprite": "runestone-lit",
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "The rune burns blue. Somewhere north,",
+                    "iron is moving."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "upper": [
+        [
+          0,
+          "town.3"
+        ],
+        [
+          1,
+          "town.19"
+        ],
+        [
+          2,
+          "town.6"
+        ],
+        [
+          3,
+          "town.31"
+        ],
+        [
+          4,
+          "town.4"
+        ],
+        [
+          5,
+          "town.20"
+        ],
+        [
+          6,
+          "town.18"
+        ],
+        [
+          7,
+          "town.5"
+        ],
+        [
+          11,
+          "town.6"
+        ],
+        [
+          12,
+          "town.31"
+        ],
+        [
+          13,
+          "town.4"
+        ],
+        [
+          14,
+          "town.20"
+        ],
+        [
+          15,
+          "town.18"
+        ],
+        [
+          16,
+          "town.5"
+        ],
+        [
+          17,
+          "town.30"
+        ],
+        [
+          18,
+          "town.31"
+        ],
+        [
+          19,
+          "town.4"
+        ],
+        [
+          20,
+          "town.20"
+        ],
+        [
+          21,
+          "town.18"
+        ],
+        [
+          22,
+          "town.5"
+        ],
+        [
+          23,
+          "town.30"
+        ],
+        [
+          24,
+          "town.3"
+        ],
+        [
+          25,
+          "town.19"
+        ],
+        [
+          29,
+          "town.20"
+        ],
+        [
+          30,
+          "town.18"
+        ],
+        [
+          31,
+          "town.5"
+        ],
+        [
+          32,
+          "town.30"
+        ],
+        [
+          33,
+          "town.3"
+        ],
+        [
+          34,
+          "town.19"
+        ],
+        [
+          35,
+          "town.6"
+        ],
+        [
+          36,
+          "town.18"
+        ],
+        [
+          37,
+          "town.5"
+        ],
+        [
+          38,
+          "town.30"
+        ],
+        [
+          39,
+          "town.3"
+        ],
+        [
+          40,
+          "town.19"
+        ],
+        [
+          41,
+          "town.6"
+        ],
+        [
+          42,
+          "town.31"
+        ],
+        [
+          43,
+          "town.4"
+        ],
+        [
+          47,
+          "town.30"
+        ],
+        [
+          48,
+          "town.3"
+        ],
+        [
+          49,
+          "town.19"
+        ],
+        [
+          50,
+          "town.6"
+        ],
+        [
+          51,
+          "town.31"
+        ],
+        [
+          52,
+          "town.4"
+        ],
+        [
+          53,
+          "town.20"
+        ],
+        [
+          54,
+          "town.3"
+        ],
+        [
+          55,
+          "town.19"
+        ],
+        [
+          56,
+          "town.6"
+        ],
+        [
+          57,
+          "town.31"
+        ],
+        [
+          58,
+          "town.4"
+        ],
+        [
+          65,
+          "town.6"
+        ],
+        [
+          66,
+          "town.31"
+        ],
+        [
+          67,
+          "town.4"
+        ],
+        [
+          68,
+          "town.20"
+        ],
+        [
+          69,
+          "town.18"
+        ],
+        [
+          70,
+          "town.5"
+        ],
+        [
+          71,
+          "town.30"
+        ],
+        [
+          72,
+          "town.31"
+        ],
+        [
+          73,
+          "town.4"
+        ],
+        [
+          74,
+          "town.20"
+        ],
+        [
+          75,
+          "town.18"
+        ],
+        [
+          83,
+          "town.20"
+        ],
+        [
+          84,
+          "town.18"
+        ],
+        [
+          85,
+          "town.5"
+        ],
+        [
+          86,
+          "town.30"
+        ],
+        [
+          87,
+          "town.3"
+        ],
+        [
+          88,
+          "town.19"
+        ],
+        [
+          89,
+          "town.6"
+        ],
+        [
+          90,
+          "town.18"
+        ],
+        [
+          91,
+          "town.5"
+        ],
+        [
+          92,
+          "town.30"
+        ],
+        [
+          93,
+          "town.3"
+        ],
+        [
+          100,
+          "town.5"
+        ],
+        [
+          101,
+          "town.30"
+        ],
+        [
+          102,
+          "town.3"
+        ],
+        [
+          103,
+          "town.19"
+        ],
+        [
+          104,
+          "town.6"
+        ],
+        [
+          105,
+          "town.31"
+        ],
+        [
+          106,
+          "town.4"
+        ],
+        [
+          107,
+          "town.20"
+        ],
+        [
+          108,
+          "town.3"
+        ],
+        [
+          109,
+          "town.19"
+        ],
+        [
+          110,
+          "town.6"
+        ],
+        [
+          111,
+          "town.31"
+        ],
+        [
+          115,
+          "town.5"
+        ],
+        [
+          116,
+          "town.30"
+        ],
+        [
+          117,
+          "town.3"
+        ],
+        [
+          118,
+          "town.19"
+        ],
+        [
+          119,
+          "town.6"
+        ],
+        [
+          120,
+          "town.31"
+        ],
+        [
+          121,
+          "town.4"
+        ],
+        [
+          122,
+          "town.20"
+        ],
+        [
+          123,
+          "town.18"
+        ],
+        [
+          124,
+          "town.5"
+        ],
+        [
+          125,
+          "town.30"
+        ],
+        [
+          126,
+          "town.31"
+        ],
+        [
+          127,
+          "town.4"
+        ],
+        [
+          128,
+          "town.20"
+        ],
+        [
+          129,
+          "town.18"
+        ],
+        [
+          133,
+          "town.19"
+        ],
+        [
+          134,
+          "town.6"
+        ],
+        [
+          135,
+          "town.31"
+        ],
+        [
+          136,
+          "town.4"
+        ],
+        [
+          137,
+          "town.20"
+        ],
+        [
+          138,
+          "town.18"
+        ],
+        [
+          139,
+          "town.5"
+        ],
+        [
+          140,
+          "town.30"
+        ],
+        [
+          141,
+          "town.3"
+        ],
+        [
+          142,
+          "town.19"
+        ],
+        [
+          143,
+          "town.6"
+        ],
+        [
+          144,
+          "town.18"
+        ],
+        [
+          145,
+          "town.5"
+        ],
+        [
+          146,
+          "town.30"
+        ],
+        [
+          147,
+          "town.3"
+        ],
+        [
+          155,
+          "town.30"
+        ],
+        [
+          156,
+          "town.3"
+        ],
+        [
+          157,
+          "town.19"
+        ],
+        [
+          158,
+          "town.6"
+        ],
+        [
+          159,
+          "town.31"
+        ],
+        [
+          160,
+          "town.4"
+        ],
+        [
+          161,
+          "town.20"
+        ],
+        [
+          162,
+          "town.3"
+        ],
+        [
+          163,
+          "town.19"
+        ],
+        [
+          164,
+          "town.6"
+        ],
+        [
+          165,
+          "town.31"
+        ],
+        [
+          174,
+          "town.31"
+        ],
+        [
+          175,
+          "town.4"
+        ],
+        [
+          176,
+          "town.20"
+        ],
+        [
+          177,
+          "town.18"
+        ],
+        [
+          178,
+          "town.5"
+        ],
+        [
+          179,
+          "town.30"
+        ],
+        [
+          180,
+          "town.31"
+        ],
+        [
+          181,
+          "town.4"
+        ],
+        [
+          182,
+          "town.20"
+        ],
+        [
+          183,
+          "town.18"
+        ],
+        [
+          184,
+          "town.5"
+        ],
+        [
+          192,
+          "town.18"
+        ],
+        [
+          193,
+          "town.5"
+        ],
+        [
+          194,
+          "town.30"
+        ],
+        [
+          195,
+          "town.3"
+        ],
+        [
+          196,
+          "town.19"
+        ],
+        [
+          197,
+          "town.6"
+        ],
+        [
+          198,
+          "town.18"
+        ],
+        [
+          199,
+          "town.5"
+        ],
+        [
+          200,
+          "town.30"
+        ],
+        [
+          201,
+          "town.3"
+        ],
+        [
+          202,
+          "town.19"
+        ],
+        [
+          203,
+          "town.6"
+        ],
+        [
+          204,
+          "town.31"
+        ],
+        [
+          205,
+          "town.4"
+        ],
+        [
+          206,
+          "town.20"
+        ],
+        [
+          210,
+          "town.3"
+        ],
+        [
+          211,
+          "town.19"
+        ],
+        [
+          212,
+          "town.6"
+        ],
+        [
+          213,
+          "town.31"
+        ],
+        [
+          214,
+          "town.4"
+        ],
+        [
+          215,
+          "town.20"
+        ],
+        [
+          216,
+          "town.3"
+        ],
+        [
+          217,
+          "town.19"
+        ],
+        [
+          218,
+          "town.6"
+        ],
+        [
+          219,
+          "town.31"
+        ],
+        [
+          220,
+          "town.4"
+        ],
+        [
+          221,
+          "town.20"
+        ],
+        [
+          222,
+          "town.18"
+        ],
+        [
+          223,
+          "town.5"
+        ],
+        [
+          224,
+          "town.30"
+        ],
+        [
+          228,
+          "town.31"
+        ],
+        [
+          229,
+          "town.4"
+        ],
+        [
+          230,
+          "town.20"
+        ],
+        [
+          231,
+          "town.18"
+        ],
+        [
+          232,
+          "town.5"
+        ],
+        [
+          233,
+          "town.30"
+        ],
+        [
+          234,
+          "town.31"
+        ],
+        [
+          235,
+          "town.4"
+        ],
+        [
+          236,
+          "town.20"
+        ],
+        [
+          237,
+          "town.18"
+        ],
+        [
+          238,
+          "town.5"
+        ],
+        [
+          239,
+          "town.30"
+        ],
+        [
+          240,
+          "town.3"
+        ],
+        [
+          241,
+          "town.19"
+        ],
+        [
+          242,
+          "town.6"
+        ],
+        [
+          246,
+          "town.18"
+        ],
+        [
+          247,
+          "town.5"
+        ],
+        [
+          248,
+          "town.30"
+        ],
+        [
+          249,
+          "town.3"
+        ],
+        [
+          250,
+          "town.19"
+        ],
+        [
+          251,
+          "town.6"
+        ],
+        [
+          151,
+          "town.29"
+        ],
+        [
+          112,
+          "town.17"
+        ],
+        [
+          118,
+          "town.17"
+        ],
+        [
+          97,
+          "town.29"
+        ]
+      ],
+      "passage": [
+        [
+          0,
+          "block"
+        ],
+        [
+          1,
+          "block"
+        ],
+        [
+          2,
+          "block"
+        ],
+        [
+          3,
+          "block"
+        ],
+        [
+          4,
+          "block"
+        ],
+        [
+          5,
+          "block"
+        ],
+        [
+          6,
+          "block"
+        ],
+        [
+          7,
+          "block"
+        ],
+        [
+          11,
+          "block"
+        ],
+        [
+          12,
+          "block"
+        ],
+        [
+          13,
+          "block"
+        ],
+        [
+          14,
+          "block"
+        ],
+        [
+          15,
+          "block"
+        ],
+        [
+          16,
+          "block"
+        ],
+        [
+          17,
+          "block"
+        ],
+        [
+          18,
+          "block"
+        ],
+        [
+          19,
+          "block"
+        ],
+        [
+          20,
+          "block"
+        ],
+        [
+          21,
+          "block"
+        ],
+        [
+          22,
+          "block"
+        ],
+        [
+          23,
+          "block"
+        ],
+        [
+          24,
+          "block"
+        ],
+        [
+          25,
+          "block"
+        ],
+        [
+          29,
+          "block"
+        ],
+        [
+          30,
+          "block"
+        ],
+        [
+          31,
+          "block"
+        ],
+        [
+          32,
+          "block"
+        ],
+        [
+          33,
+          "block"
+        ],
+        [
+          34,
+          "block"
+        ],
+        [
+          35,
+          "block"
+        ],
+        [
+          36,
+          "block"
+        ],
+        [
+          37,
+          "block"
+        ],
+        [
+          38,
+          "block"
+        ],
+        [
+          39,
+          "block"
+        ],
+        [
+          40,
+          "block"
+        ],
+        [
+          41,
+          "block"
+        ],
+        [
+          42,
+          "block"
+        ],
+        [
+          43,
+          "block"
+        ],
+        [
+          47,
+          "block"
+        ],
+        [
+          48,
+          "block"
+        ],
+        [
+          49,
+          "block"
+        ],
+        [
+          50,
+          "block"
+        ],
+        [
+          51,
+          "block"
+        ],
+        [
+          52,
+          "block"
+        ],
+        [
+          53,
+          "block"
+        ],
+        [
+          54,
+          "block"
+        ],
+        [
+          55,
+          "block"
+        ],
+        [
+          56,
+          "block"
+        ],
+        [
+          57,
+          "block"
+        ],
+        [
+          58,
+          "block"
+        ],
+        [
+          65,
+          "block"
+        ],
+        [
+          66,
+          "block"
+        ],
+        [
+          67,
+          "block"
+        ],
+        [
+          68,
+          "block"
+        ],
+        [
+          69,
+          "block"
+        ],
+        [
+          70,
+          "block"
+        ],
+        [
+          71,
+          "block"
+        ],
+        [
+          72,
+          "block"
+        ],
+        [
+          73,
+          "block"
+        ],
+        [
+          74,
+          "block"
+        ],
+        [
+          75,
+          "block"
+        ],
+        [
+          83,
+          "block"
+        ],
+        [
+          84,
+          "block"
+        ],
+        [
+          85,
+          "block"
+        ],
+        [
+          86,
+          "block"
+        ],
+        [
+          87,
+          "block"
+        ],
+        [
+          88,
+          "block"
+        ],
+        [
+          89,
+          "block"
+        ],
+        [
+          90,
+          "block"
+        ],
+        [
+          91,
+          "block"
+        ],
+        [
+          92,
+          "block"
+        ],
+        [
+          93,
+          "block"
+        ],
+        [
+          100,
+          "block"
+        ],
+        [
+          101,
+          "block"
+        ],
+        [
+          102,
+          "block"
+        ],
+        [
+          103,
+          "block"
+        ],
+        [
+          104,
+          "block"
+        ],
+        [
+          105,
+          "block"
+        ],
+        [
+          106,
+          "block"
+        ],
+        [
+          107,
+          "block"
+        ],
+        [
+          108,
+          "block"
+        ],
+        [
+          109,
+          "block"
+        ],
+        [
+          110,
+          "block"
+        ],
+        [
+          111,
+          "block"
+        ],
+        [
+          115,
+          "block"
+        ],
+        [
+          116,
+          "block"
+        ],
+        [
+          117,
+          "block"
+        ],
+        [
+          118,
+          "block"
+        ],
+        [
+          119,
+          "block"
+        ],
+        [
+          120,
+          "block"
+        ],
+        [
+          121,
+          "block"
+        ],
+        [
+          122,
+          "block"
+        ],
+        [
+          123,
+          "block"
+        ],
+        [
+          124,
+          "block"
+        ],
+        [
+          125,
+          "block"
+        ],
+        [
+          126,
+          "block"
+        ],
+        [
+          127,
+          "block"
+        ],
+        [
+          128,
+          "block"
+        ],
+        [
+          129,
+          "block"
+        ],
+        [
+          133,
+          "block"
+        ],
+        [
+          134,
+          "block"
+        ],
+        [
+          135,
+          "block"
+        ],
+        [
+          136,
+          "block"
+        ],
+        [
+          137,
+          "block"
+        ],
+        [
+          138,
+          "block"
+        ],
+        [
+          139,
+          "block"
+        ],
+        [
+          140,
+          "block"
+        ],
+        [
+          141,
+          "block"
+        ],
+        [
+          142,
+          "block"
+        ],
+        [
+          143,
+          "block"
+        ],
+        [
+          144,
+          "block"
+        ],
+        [
+          145,
+          "block"
+        ],
+        [
+          146,
+          "block"
+        ],
+        [
+          147,
+          "block"
+        ],
+        [
+          155,
+          "block"
+        ],
+        [
+          156,
+          "block"
+        ],
+        [
+          157,
+          "block"
+        ],
+        [
+          158,
+          "block"
+        ],
+        [
+          159,
+          "block"
+        ],
+        [
+          160,
+          "block"
+        ],
+        [
+          161,
+          "block"
+        ],
+        [
+          162,
+          "block"
+        ],
+        [
+          163,
+          "block"
+        ],
+        [
+          164,
+          "block"
+        ],
+        [
+          165,
+          "block"
+        ],
+        [
+          174,
+          "block"
+        ],
+        [
+          175,
+          "block"
+        ],
+        [
+          176,
+          "block"
+        ],
+        [
+          177,
+          "block"
+        ],
+        [
+          178,
+          "block"
+        ],
+        [
+          179,
+          "block"
+        ],
+        [
+          180,
+          "block"
+        ],
+        [
+          181,
+          "block"
+        ],
+        [
+          182,
+          "block"
+        ],
+        [
+          183,
+          "block"
+        ],
+        [
+          184,
+          "block"
+        ],
+        [
+          192,
+          "block"
+        ],
+        [
+          193,
+          "block"
+        ],
+        [
+          194,
+          "block"
+        ],
+        [
+          195,
+          "block"
+        ],
+        [
+          196,
+          "block"
+        ],
+        [
+          197,
+          "block"
+        ],
+        [
+          198,
+          "block"
+        ],
+        [
+          199,
+          "block"
+        ],
+        [
+          200,
+          "block"
+        ],
+        [
+          201,
+          "block"
+        ],
+        [
+          202,
+          "block"
+        ],
+        [
+          203,
+          "block"
+        ],
+        [
+          204,
+          "block"
+        ],
+        [
+          205,
+          "block"
+        ],
+        [
+          206,
+          "block"
+        ],
+        [
+          210,
+          "block"
+        ],
+        [
+          211,
+          "block"
+        ],
+        [
+          212,
+          "block"
+        ],
+        [
+          213,
+          "block"
+        ],
+        [
+          214,
+          "block"
+        ],
+        [
+          215,
+          "block"
+        ],
+        [
+          216,
+          "block"
+        ],
+        [
+          217,
+          "block"
+        ],
+        [
+          218,
+          "block"
+        ],
+        [
+          219,
+          "block"
+        ],
+        [
+          220,
+          "block"
+        ],
+        [
+          221,
+          "block"
+        ],
+        [
+          222,
+          "block"
+        ],
+        [
+          223,
+          "block"
+        ],
+        [
+          224,
+          "block"
+        ],
+        [
+          228,
+          "block"
+        ],
+        [
+          229,
+          "block"
+        ],
+        [
+          230,
+          "block"
+        ],
+        [
+          231,
+          "block"
+        ],
+        [
+          232,
+          "block"
+        ],
+        [
+          233,
+          "block"
+        ],
+        [
+          234,
+          "block"
+        ],
+        [
+          235,
+          "block"
+        ],
+        [
+          236,
+          "block"
+        ],
+        [
+          237,
+          "block"
+        ],
+        [
+          238,
+          "block"
+        ],
+        [
+          239,
+          "block"
+        ],
+        [
+          240,
+          "block"
+        ],
+        [
+          241,
+          "block"
+        ],
+        [
+          242,
+          "block"
+        ],
+        [
+          246,
+          "block"
+        ],
+        [
+          247,
+          "block"
+        ],
+        [
+          248,
+          "block"
+        ],
+        [
+          249,
+          "block"
+        ],
+        [
+          250,
+          "block"
+        ],
+        [
+          251,
+          "block"
+        ]
+      ]
+    },
+    {
+      "id": "cave",
+      "name": "Sunstone Cave",
+      "width": 18,
+      "height": 13,
+      "sheets": [
+        "dun"
+      ],
+      "ground": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "dun.28",
+        "dun.30",
+        "dun.28",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.28",
+        "dun.30",
+        "dun.28",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.52",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.42",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.24",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.42",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.42",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.42",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.24",
+        "dun.25",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.42",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.40",
+        null,
+        null,
+        "dun.40",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.50",
+        "dun.48",
+        "dun.48",
+        "dun.48",
+        "dun.40",
+        null
+      ],
+      "events": [
+        {
+          "id": "cave-ambience",
+          "name": "Dripping Water",
+          "x": 17,
+          "y": 1,
+          "pages": [
+            {
+              "trigger": "parallel",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "wait",
+                  "seconds": 6
+                },
+                {
+                  "op": "se",
+                  "name": "drip",
+                  "volume": 40
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cave-return",
+          "name": "Exit to the Wood",
+          "x": 9,
+          "y": 12,
+          "pages": [
+            {
+              "trigger": "playerTouch",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "transfer",
+                  "map": "forest",
+                  "x": 10,
+                  "y": 13,
+                  "dir": "down"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "rune-gate",
+          "name": "Iron Gate",
+          "x": 9,
+          "y": 3,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "irongate",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "if",
+                  "if": {
+                    "kind": "switch",
+                    "id": "rune-lit",
+                    "value": true
+                  },
+                  "then": [
+                    {
+                      "op": "se",
+                      "name": "unlock"
+                    },
+                    {
+                      "op": "selfSwitch",
+                      "key": "A",
+                      "value": true
+                    },
+                    {
+                      "op": "text",
+                      "lines": [
+                        "Blue light pours from the stone in your",
+                        "pack. The gate folds itself open."
+                      ]
+                    }
+                  ],
+                  "else": [
+                    {
+                      "op": "text",
+                      "lines": [
+                        "Bars of cold iron. Runes welded along",
+                        "them wait for a light they recognize."
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "playerTouch",
+              "sprite": null,
+              "commands": []
+            }
+          ]
+        },
+        {
+          "id": "slime",
+          "name": "Cave Slime",
+          "x": 5,
+          "y": 7,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "slime",
+              "blocks": true,
+              "moveType": "random",
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "BLUB.",
+                    "(It is, against all advice, fed.)"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "bat",
+          "name": "Cave Bat",
+          "x": 12,
+          "y": 8,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "bat",
+              "blocks": true,
+              "moveType": "random",
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "The bat pretends it is a stalactite.",
+                    "Its commitment is impressive."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "relic-chest",
+          "name": "Sunstone Altar",
+          "x": 9,
+          "y": 2,
+          "pages": [
+            {
+              "trigger": "action",
+              "sprite": "chest-relic",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "se",
+                  "name": "chime",
+                  "volume": 80
+                },
+                {
+                  "op": "item",
+                  "item": "sunstone",
+                  "set": "add",
+                  "count": 1
+                },
+                {
+                  "op": "switch",
+                  "id": "won",
+                  "value": true
+                },
+                {
+                  "op": "selfSwitch",
+                  "key": "A",
+                  "value": true
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "Inside waits the SUNSTONE, warm as a",
+                    "small sunrise. Light returns to the hollow."
+                  ]
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "action",
+              "sprite": "chest-open",
+              "blocks": true,
+              "commands": [
+                {
+                  "op": "text",
+                  "lines": [
+                    "The altar breathes slow, satisfied."
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "victory",
+          "name": "Dawn Returns",
+          "x": 9,
+          "y": 1,
+          "pages": [
+            {
+              "condition": {
+                "switch": "won"
+              },
+              "trigger": "autorun",
+              "sprite": null,
+              "commands": [
+                {
+                  "op": "wait",
+                  "seconds": 0.5
+                },
+                {
+                  "op": "text",
+                  "lines": [
+                    "THE END.",
+                    "You carried the Sunstone home.",
+                    "Bramble Hollow wakes gold again."
+                  ]
+                },
+                {
+                  "op": "selfSwitch",
+                  "key": "A",
+                  "value": true
+                },
+                {
+                  "op": "exit"
+                }
+              ]
+            },
+            {
+              "condition": {
+                "selfSwitch": "A"
+              },
+              "trigger": "parallel",
+              "sprite": null,
+              "commands": []
+            }
+          ]
+        }
+      ],
+      "passage": [
+        [
+          26,
+          "block"
+        ],
+        [
+          27,
+          "pass"
+        ],
+        [
+          28,
+          "block"
+        ],
+        [
+          37,
+          "block"
+        ],
+        [
+          38,
+          "block"
+        ],
+        [
+          39,
+          "block"
+        ],
+        [
+          40,
+          "block"
+        ],
+        [
+          41,
+          "block"
+        ],
+        [
+          42,
+          "block"
+        ],
+        [
+          43,
+          "block"
+        ],
+        [
+          44,
+          "block"
+        ],
+        [
+          45,
+          "pass"
+        ],
+        [
+          46,
+          "block"
+        ],
+        [
+          47,
+          "block"
+        ],
+        [
+          48,
+          "block"
+        ],
+        [
+          49,
+          "block"
+        ],
+        [
+          50,
+          "block"
+        ],
+        [
+          51,
+          "block"
+        ],
+        [
+          52,
+          "block"
+        ],
+        [
+          55,
+          "block"
+        ],
+        [
+          56,
+          "block"
+        ],
+        [
+          57,
+          "block"
+        ],
+        [
+          58,
+          "block"
+        ],
+        [
+          59,
+          "block"
+        ],
+        [
+          60,
+          "block"
+        ],
+        [
+          61,
+          "block"
+        ],
+        [
+          62,
+          "block"
+        ],
+        [
+          64,
+          "block"
+        ],
+        [
+          65,
+          "block"
+        ],
+        [
+          66,
+          "block"
+        ],
+        [
+          67,
+          "block"
+        ],
+        [
+          68,
+          "block"
+        ],
+        [
+          69,
+          "block"
+        ],
+        [
+          70,
+          "block"
+        ],
+        [
+          73,
+          "block"
+        ],
+        [
+          88,
+          "block"
+        ],
+        [
+          91,
+          "block"
+        ],
+        [
+          106,
+          "block"
+        ],
+        [
+          109,
+          "block"
+        ],
+        [
+          124,
+          "block"
+        ],
+        [
+          127,
+          "block"
+        ],
+        [
+          142,
+          "block"
+        ],
+        [
+          145,
+          "block"
+        ],
+        [
+          160,
+          "block"
+        ],
+        [
+          163,
+          "block"
+        ],
+        [
+          178,
+          "block"
+        ],
+        [
+          181,
+          "block"
+        ],
+        [
+          196,
+          "block"
+        ],
+        [
+          199,
+          "block"
+        ],
+        [
+          214,
+          "block"
+        ],
+        [
+          217,
+          "block"
+        ],
+        [
+          232,
+          "block"
+        ]
+      ],
+      "upper": [
+        [
+          148,
+          "dun.54"
+        ],
+        [
+          121,
+          "dun.55"
+        ],
+        [
+          185,
+          "dun.62"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "assets/map-village-ground.png": {
+    "psm": 2
+  },
+  "assets/map-village-upper.png": {
+    "psm": 2
+  },
+  "assets/map-forest-ground.png": {
+    "psm": 2
+  },
+  "assets/map-forest-upper.png": {
+    "psm": 2
+  },
+  "assets/map-cave-ground.png": {
+    "psm": 2
+  },
+  "assets/map-cave-upper.png": {
+    "psm": 2
+  }
+}
