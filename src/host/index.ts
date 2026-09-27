@@ -8,3 +8,4 @@ export {
   listSlotsFs,
   type FsSlotInfo,
 } from "./save-fs.ts";
+export { loadAttractTape } from "./attract-tape.ts";

@@ -17,6 +17,7 @@ export * from "./interpreter.ts";
 export * from "./chars.ts";
 export * from "./session.ts";
 export * from "./attract.ts";
+export * from "./tape.ts";
 export * from "./journey-search.ts";
 export * from "./schema-validate.ts";
 export * from "./save.ts";

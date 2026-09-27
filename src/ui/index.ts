@@ -5,3 +5,6 @@
 export { DialogBox } from "./DialogBox.tsx";
 export { PlayerSprite, playerImageKey, type PlayerFrames, type PlayerSpriteProps } from "./PlayerSprite.tsx";
 export { SaveMenu, type SlotInfo, type SaveMenuProps } from "./SaveMenu.tsx";
+export { ChunkLayer, type ChunkLayerProps } from "./ChunkLayer.tsx";
+export { GameView } from "./GameView.tsx";
+export type { GameAssets } from "./game-assets.ts";
