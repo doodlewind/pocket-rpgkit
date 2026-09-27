@@ -1,5 +1,5 @@
-// tests/helpers/boot.ts — boot the built example bundle (dist/app.js) on
-// PocketJS's deterministic wasm sim host from the vendored submodule.
+// tests/helpers/boot.ts — boot the built example bundles (dist/<name>.js)
+// on PocketJS's deterministic wasm sim host from the vendored submodule.
 //
 // This mirrors vendor/pocketjs/hosts/sim/sim.ts bootWorld for an external
 // project: the bundle and pak live in THIS repo's dist/, and the wasm core
@@ -22,7 +22,7 @@ let wasmBytes: ArrayBuffer | undefined;
  *  (`bun run build:wasm`). A fresh `bun install && bun test` reports the
  *  reducer suites green and skips these with the missing-artifact reason. */
 export function simPreflight(): { ok: true } | { ok: false; reason: string } {
-  const bundle = join(DIST, "app.js");
+  const bundle = join(DIST, "meadow.js");
   if (!existsSync(bundle)) {
     return { ok: false, reason: `missing ${bundle} — run \`bun run build:example\`` };
   }
@@ -55,7 +55,7 @@ export async function bootExample(
   viewport: { width: number; height: number } = { width: 480, height: 272 },
 ): Promise<SimWorld> {
   for (const [path, hint] of [
-    [join(DIST, "app.js"), "run `bun run build:example`"],
+    [join(DIST, "meadow.js"), "run `bun run build:example meadow`"],
     [WASM_PATH, "run `(cd vendor/pocketjs && bun tools/wasm.ts)`"],
   ] as const) {
     if (!existsSync(path)) throw new Error(`missing ${path} — ${hint}`);
@@ -64,15 +64,15 @@ export async function bootExample(
   const wasm = await createWasmUi(wasmBytes, viewport);
   const g = globalThis as Record<string, unknown>;
   g.ui = wasm.ops;
-  g.__pak = existsSync(join(DIST, "app.pak"))
-    ? await Bun.file(join(DIST, "app.pak")).arrayBuffer()
+  g.__pak = existsSync(join(DIST, "meadow.pak"))
+    ? await Bun.file(join(DIST, "meadow.pak")).arrayBuffer()
     : undefined;
   g.frame = undefined;
   g.offload = undefined;
   g.audio = undefined;
   g.db = undefined;
   g.fs = undefined;
-  g.__pocketApp = "app";
+  g.__pocketApp = "meadow";
   g.__simHz = hz;
   const inbox: unknown[] = [];
   const outbox: unknown[] = [];
@@ -83,7 +83,7 @@ export async function bootExample(
     recv: () => (inbox.length ? (inbox.shift() as unknown) : null),
   };
   if (extraGlobals) Object.assign(g, extraGlobals);
-  (0, eval)(await Bun.file(join(DIST, "app.js")).text());
+  (0, eval)(await Bun.file(join(DIST, "meadow.js")).text());
   const appFrame = g.frame as ((buttons: number, analog?: number) => void) | undefined;
   if (typeof appFrame !== "function") {
     throw new Error("sim: example bundle did not install globalThis.frame");
@@ -110,4 +110,19 @@ export interface ExampleState {
 /** The live reducer state the example app exposes. */
 export function exampleState(): any {
   return (globalThis as any).__rpgkitExample.state() as ExampleState;
+}
+
+/** Whether a sim test for example `name` can run (bundle + wasm core). */
+export function appPreflight(name: string): { ok: true } | { ok: false; reason: string } {
+  const bundle = join(DIST, `${name}.js`);
+  if (!existsSync(bundle)) return { ok: false, reason: `missing ${bundle} — run \`bun run build:example ${name}\`` };
+  if (!existsSync(WASM_PATH)) return { ok: false, reason: `missing ${WASM_PATH} — run \`bun run build:wasm\`` };
+  return { ok: true };
+}
+
+/** Absolute bundle path (no extension) for the vendored sim's bootWorld,
+ *  which boots external-project bundles by path:
+ *    bootWorld(appBundle("sunstone"), 60)  */
+export function appBundle(name: string): string {
+  return join(DIST, name);
 }

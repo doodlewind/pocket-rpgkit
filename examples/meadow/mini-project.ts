@@ -1,4 +1,4 @@
-// example/mini-project.ts — the minimal sample shipped with Pocket RPG Kit:
+// examples/meadow/mini-project.ts — the minimal sample shipped with Pocket RPG Kit:
 // one 20x12-tile meadow and four events. It proves the component end to end
 // (session reducer, dialog, choices, touch trigger, page switching) without
 // carrying the three-map sample game, which lives in its own repository.
@@ -6,7 +6,7 @@
 // Geometry is authored in code; tools/gen-assets.ts bakes the ground/upper
 // canvases from it. The format is rpgkit-project/v1 (src/data/schema.json).
 
-import type { Command, MapDef, Project, Sheet, TileId } from "../src/engine/types.ts";
+import type { Command, MapDef, Project, Sheet, TileId } from "../../src/engine/types.ts";
 
 export const SHEET: Sheet = { id: "town", cols: 12, rows: 11, pak: "chunks" };
 

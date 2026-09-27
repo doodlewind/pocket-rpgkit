@@ -14,8 +14,8 @@
     }
   },
   "app": {
-    "entry": "example/app.tsx",
-    "output": "pocket-rpgkit-example",
+    "entry": "examples/meadow/meadow.tsx",
+    "output": "meadow",
     "framework": "solid",
     "viewport": {
       "fixed": {

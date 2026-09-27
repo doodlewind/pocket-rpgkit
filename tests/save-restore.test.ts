@@ -5,7 +5,7 @@
 // fiber event/page provenance. These are the checks the map-agnostic
 // save-validate.ts cannot make (the engine core has no World).
 import { describe, expect, test } from "bun:test";
-import { buildMiniProject } from "../example/mini-project.ts";
+import { buildMiniProject } from "../examples/meadow/mini-project.ts";
 import { buildPassage } from "../src/engine/passability.ts";
 import { initialMovement, type MovementState } from "../src/engine/movement.ts";
 import { createInterpState } from "../src/engine/interpreter.ts";

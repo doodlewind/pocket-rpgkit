@@ -840,7 +840,7 @@ describe("determinism", () => {
 
 // --- data conformance --------------------------------------------------------
 
-import { buildMiniProject } from "../example/mini-project.ts";
+import { buildMiniProject } from "../examples/meadow/mini-project.ts";
 
 describe("the shipped example project conforms to the v1 schema", async () => {
   const schema = await Bun.file(new URL("../src/data/schema.json", import.meta.url)).json();

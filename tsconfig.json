@@ -24,7 +24,7 @@
     "src",
     "tools",
     "tests",
-    "example",
+    "examples",
     "vendor/pocketjs/framework/src",
     "vendor/pocketjs/contracts/spec"
   ],

@@ -25,7 +25,7 @@ import {
   CHUNK_TILES,
 } from "../src/engine/tiles.ts";
 import { facingOfDir, startCamera } from "../src/engine/start.ts";
-import { buildMiniProject, buildMiniMap } from "../example/mini-project.ts";
+import { buildMiniProject, buildMiniMap } from "../examples/meadow/mini-project.ts";
 import { validateSchema, type VError } from "../src/engine/schema-validate.ts";
 import type { Project } from "../src/engine/types.ts";
 

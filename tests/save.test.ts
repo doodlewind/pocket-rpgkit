@@ -51,7 +51,7 @@ import {
 } from "../src/engine/interpreter.ts";
 import { initialMovement, stepMovement, type MovementState } from "../src/engine/movement.ts";
 import { buildPassage } from "../src/engine/passability.ts";
-import { buildMiniProject } from "../example/mini-project.ts";
+import { buildMiniProject } from "../examples/meadow/mini-project.ts";
 import type { MapDef } from "../src/engine/types.ts";
 
 // --- harness: fold the real reducers into a rich saveable state -----------

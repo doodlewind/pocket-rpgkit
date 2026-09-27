@@ -1,6 +1,6 @@
-// example/app.tsx — minimal PocketJS app proving pocket-rpgkit works.
+// examples/meadow/meadow.tsx — minimal PocketJS app proving pocket-rpgkit works.
 //
-// One 20x12-tile meadow (example/mini-project.ts), one ground Image, one
+// One 20x12-tile meadow (mini-project.ts), one ground Image, one
 // upper Image, the player between them, a follow-less centered world frame
 // (the map is smaller than the 480x272 viewport), and the DialogBox driven
 // by the session reducer (stepSession). The save menu and NPC sprites from
@@ -37,11 +37,11 @@ import {
   type Modal,
   type Facing,
   type WalkPose,
-} from "../src/index.ts";
+} from "../../src/index.ts";
 // In an app that depends on the published package these are
 // "pocket-rpgkit" / "pocket-rpgkit/ui"; the in-repo example imports the
 // sources relatively so the PocketJS pass-1 transform walks them.
-import { PlayerSprite, DialogBox, type PlayerFrames } from "../src/ui/index.ts";
+import { PlayerSprite, DialogBox, type PlayerFrames } from "../../src/ui/index.ts";
 import {
   MEADOW_GROUND,
   MEADOW_UPPER,

@@ -1,4 +1,4 @@
-// tests/example-sim.test.ts — the minimal example boots on PocketJS's wasm
+// tests/meadow-sim.test.ts — the minimal example boots on PocketJS's wasm
 // sim host and proves the packaged component works end to end:
 //
 //   PIXELS     semantic assertions, not only hashes: a map smaller than the
@@ -15,7 +15,7 @@
 //              sits beside the semantic checks; a hash alone cannot tell
 //              content from a wrong-but-stable render).
 //
-// Requires dist/app.js (bun run build:example) and the vendored wasm
+// Requires dist/meadow.js (bun run build:example) and the vendored wasm
 // (cd vendor/pocketjs && bun tools/wasm.ts).
 
 import { describe, expect, test } from "bun:test";

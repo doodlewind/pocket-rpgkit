@@ -14,7 +14,7 @@ import {
   type SessionState,
 } from "../src/engine/session.ts";
 import { createSwitchState } from "../src/engine/interpreter.ts";
-import { buildMiniProject } from "../example/mini-project.ts";
+import { buildMiniProject } from "../examples/meadow/mini-project.ts";
 import type { Command, GameEvent, MapDef, MoveStep, Project, TileId } from "../src/engine/types.ts";
 
 const GRASS: TileId = "town.0";
