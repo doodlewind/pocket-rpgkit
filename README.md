@@ -58,6 +58,8 @@ bun run build:wasm       # one-time: compile the vendored sim core
 bun run build:example    # build meadow, sunstone, grow into dist/
 bun test                 # 428 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
+bun run desktop sunstone # build for the desktop host and open a window
+                         # (also: grow, meadow; needs a Rust toolchain)
 ```
 
 `bun run build:example sunstone` builds one example. `bun run gen-assets`

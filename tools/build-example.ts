@@ -19,25 +19,28 @@ import { join, resolve } from "node:path";
 export const EXAMPLES = ["meadow", "sunstone", "grow"] as const;
 
 const root = resolve(import.meta.dir, "..");
-mkdirSync(join(root, "dist"), { recursive: true });
 
 const buildTs = join(root, "vendor", "pocketjs", "tools", "build.ts");
-const wanted = process.argv.slice(2);
-for (const name of wanted) {
-  if (!(EXAMPLES as readonly string[]).includes(name)) {
-    console.error(`build-example: unknown example "${name}" (have: ${EXAMPLES.join(", ")})`);
-    process.exit(2);
-  }
-}
 
-for (const name of wanted.length ? wanted : EXAMPLES) {
-  const entry = join(root, "examples", name, `${name}.tsx`);
-  if (!existsSync(entry)) throw new Error(`build-example: missing ${entry}`);
-  const proc = Bun.spawn({
-    cmd: [process.execPath, buildTs, entry, `--project-root=${root}`, `--outdir=${join(root, "dist")}`],
-    cwd: root,
-    stdio: ["inherit", "inherit", "inherit"],
-  });
-  const exit = await proc.exited;
-  if (exit !== 0) process.exit(exit);
+if (import.meta.main) await buildExamples(process.argv.slice(2));
+
+async function buildExamples(wanted: string[]): Promise<void> {
+  mkdirSync(join(root, "dist"), { recursive: true });
+  for (const name of wanted) {
+    if (!(EXAMPLES as readonly string[]).includes(name)) {
+      console.error(`build-example: unknown example "${name}" (have: ${EXAMPLES.join(", ")})`);
+      process.exit(2);
+    }
+  }
+  for (const name of wanted.length ? wanted : EXAMPLES) {
+    const entry = join(root, "examples", name, `${name}.tsx`);
+    if (!existsSync(entry)) throw new Error(`build-example: missing ${entry}`);
+    const proc = Bun.spawn({
+      cmd: [process.execPath, buildTs, entry, `--project-root=${root}`, `--outdir=${join(root, "dist")}`],
+      cwd: root,
+      stdio: ["inherit", "inherit", "inherit"],
+    });
+    const exit = await proc.exited;
+    if (exit !== 0) process.exit(exit);
+  }
 }

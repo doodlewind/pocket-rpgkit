@@ -7,3 +7,6 @@ dist/
 
 # The PocketJS submodule builds its wasm backend into its own gitignored
 # hosts/web/pocketjs.wasm; ignore any stray build receipt here too.
+
+# desktop build plans (tools/desktop.ts)
+.pocket/

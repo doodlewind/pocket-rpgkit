@@ -22,7 +22,8 @@
     "gen-assets": "bun examples/meadow/gen-assets.ts && bun examples/sunstone/gen-assets.ts && bun examples/grow/gen-assets.ts",
     "build:example": "bun tools/build-example.ts",
     "build:wasm": "bun vendor/pocketjs/tools/wasm.ts",
-    "check": "bun test && bunx tsc --noEmit"
+    "check": "bun test && bunx tsc --noEmit",
+    "desktop": "bun tools/desktop.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
