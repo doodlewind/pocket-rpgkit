@@ -11,9 +11,10 @@ RPG Maker or other commercial game assets are included.
 - License: **CC0 1.0 Universal** (public domain dedication),
   https://creativecommons.org/publicdomain/zero/1.0/legalcode.
   Verbatim license text: `examples/meadow/assets/src/LICENSE-kenney-town.txt`.
-- The baked `examples/meadow/assets/meadow-ground.png` and `meadow-upper.png`
-  (512×512, PSM_4444) are generated from this sheet by
-  `tools/gen-assets.ts` via the game-agnostic pipeline in `tools/lib/bake.ts`.
+- The baked `examples/meadow/assets/meadow-ground.png` and
+  `meadow-upper.png` (512×512, PSM_4444) are generated from this sheet by
+  `examples/meadow/gen-assets.ts` via the game-agnostic pipeline in
+  `tools/lib/bake.ts`.
   Credit is not required by CC0 but is given: Kenney (www.kenney.nl).
 
 ## Lanea Zimmerman (Sharm) — Tiny 16 basic character set (player)
@@ -33,8 +34,8 @@ RPG Maker or other commercial game assets are included.
 
 ## Generated in this repository
 
-- `examples/meadow/assets/meadow-ground.png`, `meadow-upper.png` — 512×512 baked
-  canvases produced by `tools/gen-assets.ts` from the Kenney sheet above
-  (CC0; derivatives remain free to use under CC0).
-- `examples/meadow/assets/player-*.png` — 16×16 frames cropped from the Sharm
-  walker atlases above (CC-BY 3.0; the credit line above applies).
+- `examples/meadow/assets/meadow-ground.png`, `meadow-upper.png` — 512×512
+  baked canvases produced by `examples/meadow/gen-assets.ts` from the
+  Kenney sheet above (CC0; derivatives remain free to use under CC0).
+- `examples/meadow/assets/player-*.png` — 16×16 frames cropped from the
+  Sharm walker atlases above (CC-BY 3.0; the credit line above applies).

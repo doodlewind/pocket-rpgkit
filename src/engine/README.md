@@ -12,7 +12,9 @@ state.
 - `viewport.ts` — centering offset for maps smaller than the host viewport.
 - `start.ts` — camera placement derived from a project's start tile.
 - `tiles.ts` — tile ids and the baked-chunk constants.
-- `passability.ts`, `movement.ts` — tile collision (source-cell exit
+- `motion-clock.ts` — the fixed 60 Hz motion reference and how many
+  reference ticks one host frame folds.
+- `passability.ts`, `movement.ts` — tile collision (dual-edge `dirBlock`
   masks, blocking bodies) and the grid mover.
 - `interpreter.ts` — event pages, triggers, the 15-command interpreter,
   the typewriter clock, the seeded RNG, saveable switch state.
@@ -27,6 +29,10 @@ state.
 - `save.ts`, `save-validate.ts`, `save-restore.ts`, `save-menu.ts` —
   save envelope/codecs, structural validation, the map-aware restore gate,
   and the save-menu navigation reducer.
+- `attract.ts`, `tape.ts` — the attract/takeover/rewind controller over
+  one unified u16 input stream, and RLE/devtools tape helpers.
+- `journey-search.ts` — A* over real reducer frames, for deterministic
+  journey drivers on hosts whose frame spans several reference ticks.
 - `types.ts` — the `rpgkit-project/v1` vocabulary (normative schema:
   `../data/schema.json`).
 
