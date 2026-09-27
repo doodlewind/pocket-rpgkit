@@ -35,6 +35,13 @@ the parts an RPG-Maker-style game needs without any specific game:
 | ![Sunstone attract takeover](tests/goldens/sunstone-attract.700.png) | ![Grown village, snow biome](tests/goldens/grow.2028.png) |
 | **`examples/sunstone`** — *The Sunstone of Bramble Hollow*, a three-map RPG (village → forest → cave: key chest, rune stone, thorn and iron gates, the relic). Idle for 10 s and it plays itself from a frozen 539-frame winning tape; press any button to take over mid-demo, **L** to rewind. | **`examples/grow`** — four settlements grow to the right from one seeded rule set (roads, homes, fields, residents) through grass, mud, sand and snow. Scrub the timeline (**L/R**, touch, or mouse drag) to any tick — each is a pure re-grow — **SQUARE** for a new seed, **CIRCLE** to walk into the finished village, which is played as a generated `rpgkit-project/v1` document. |
 
+On the macOS desktop host (`bun run desktop sunstone`, `bun run desktop
+grow`; Metal, captured on an Apple M5 Pro):
+
+| | |
+| --- | --- |
+| ![Sunstone takeover on macOS](docs/screenshots/macos-sunstone-takeover.png) | ![Grow on macOS](docs/screenshots/macos-grow-growing.png) |
+
 **`examples/meadow`** is the minimal example: one 20×12 map and four
 events proving the package boots, renders, replays deterministically,
 and round-trips on the PocketJS wasm sim host.
