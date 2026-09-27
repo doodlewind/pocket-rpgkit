@@ -191,6 +191,31 @@ describe("conditions and page selection", () => {
     expect(evalCondition({ kind: "gold", amount: 10 }, sw, "v/e")).toBe(false);
   });
 
+  test("B6: selfSwitch false selects the off branch", () => {
+    const commands: Command[] = [{
+      op: "if",
+      if: { kind: "selfSwitch", key: "A", value: false },
+      then: [{ op: "switch", id: "off", value: true }],
+      else: [{ op: "switch", id: "on", value: true }],
+    }];
+    const w = createWorld(map([event("npc", 10, 9, commands)]));
+
+    const absent = confirmAt(createInterpState(), w);
+    const held = confirmAt(createInterpState(createSwitchState({
+      self: { "v/npc": "A" },
+    })), w);
+
+    expect(evalCondition(
+      { kind: "selfSwitch", key: "A", value: false },
+      absent.sw,
+      "v/npc",
+    )).toBe(true);
+    expect(absent.sw.switches).toMatchObject({ off: true });
+    expect(absent.sw.switches["on"]).toBeUndefined();
+    expect(held.sw.switches).toMatchObject({ on: true });
+    expect(held.sw.switches["off"]).toBeUndefined();
+  });
+
   test("activePage is the highest-index page whose condition holds", () => {
     const sw = createSwitchState();
     const ev: GameEvent = {
@@ -719,6 +744,29 @@ describe("transfer and move routes park the fiber for P1④", () => {
     expect(s2.sw.switches["done2"]).toBe(true);
   });
 
+  test("B7: concurrent waiting routes retain every handoff request", () => {
+    const route: Command = {
+      op: "moveRoute",
+      target: "this",
+      wait: true,
+      route: { repeat: false, skippable: false, steps: ["moveDown"] },
+    };
+    const w = createWorld(map([
+      event("a", 0, 0, [route], "parallel"),
+      event("b", 0, 0, [route], "parallel"),
+    ]));
+
+    const s = stepInterp(w, createInterpState(), input());
+    const parked = Object.values(s.parallels)
+      .filter((fiber) => fiber.mode === "external")
+      .map((fiber) => fiber.key)
+      .sort();
+
+    expect(parked).toEqual(["v/a", "v/b"]);
+    expect(s.pendingMoveRoutes.map((request) => request.fiber)).toEqual(parked);
+    expect(stepInterp(w, s, input()).pendingMoveRoutes).toEqual([]);
+  });
+
   test("common event pushes its command list", () => {
     const w = createWorld(
       map([event("e", 10, 9, [{ op: "common", id: "ce-1" }, { op: "switch", id: "after", value: true }])]),
@@ -920,9 +968,9 @@ describe("host-portable interpreter cloning (F1/1173 QuickJS)", () => {
 
 // --- review 1274 B1: per-frame runaway backstop ------------------------------
 // The save decoder refuses compiler-impossible backward edges, and the
-// runtime keeps a second backstop: a fiber that exceeds the per-frame step
-// limit records a fatal error on the state instead of throwing, so the
-// host frame loop never hangs and later frames are frozen, not crashed.
+// runtime keeps a second backstop: all fibers share one per-frame step
+// budget. Exceeding it records a fatal error on the state instead of
+// throwing, so the host frame loop never hangs and later frames freeze.
 
 describe("runaway backstop (review 1274 B1)", () => {
   const CELL = { x: 10, y: 10 };
@@ -997,5 +1045,61 @@ describe("runaway backstop (review 1274 B1)", () => {
     expect(s1.error).toBeUndefined();
     expect(s1.parallels[`${MAP_ID}/loop`]).toBeUndefined();
     expect(s1.sw.switches["n"]).toBe(true);
+  });
+
+  test("a compiler-emitted 10,000-op program fatalizes instead of throwing", () => {
+    const w = createWorld(loopMap());
+    const prog = compile(Array.from({ length: 10_000 }, () => ({
+      op: "switch" as const, id: "x", value: true,
+    })));
+    let out: InterpState | undefined;
+    expect(() => {
+      out = stepInterp(w, stateWithParallel(prog), input({ playerCell: CELL }));
+    }).not.toThrow();
+    expect(out!.error).toEqual({
+      kind: "runaway",
+      message: `interpreter: runaway program in ${MAP_ID}/loop`,
+    });
+  });
+
+  test("recursive common events fatalize instead of growing the stack without bound", () => {
+    const w = createWorld(loopMap(), [{
+      id: "recursive",
+      trigger: "none",
+      commands: [{ op: "common", id: "recursive" }],
+    }]);
+    const prog = compile([{ op: "common", id: "recursive" }]);
+    let out: InterpState | undefined;
+    expect(() => {
+      out = stepInterp(w, stateWithParallel(prog), input({ playerCell: CELL }));
+    }).not.toThrow();
+    expect(out!.error?.kind).toBe("runaway");
+    expect(out!.parallels[`${MAP_ID}/loop`]!.stack.length).toBeLessThanOrEqual(10_001);
+  });
+
+  test("parallel fibers share one frame-wide step budget", () => {
+    const events = [
+      event("a", 10, 10, [{ op: "exit" }], "parallel"),
+      event("b", 11, 10, [{ op: "exit" }], "parallel"),
+    ];
+    const w = createWorld(map(events));
+    const state = createInterpState();
+    const prog = compile(Array.from({ length: 6_000 }, () => ({
+      op: "switch" as const, id: "x", value: true,
+    })));
+    for (const id of ["a", "b"] as const) {
+      const key = `${MAP_ID}/${id}`;
+      state.parallels[key] = {
+        key, pageIndex: 0, parallel: true, stack: [{ prog, pc: 0 }],
+        mode: "run", since: 0, erase: false,
+      };
+    }
+    const out = stepInterp(w, state, input({ playerCell: CELL }));
+    expect(out.error).toEqual({
+      kind: "runaway",
+      message: `interpreter: runaway program in ${MAP_ID}/b`,
+    });
+    expect(out.parallels[`${MAP_ID}/a`]).toBeUndefined();
+    expect(out.parallels[`${MAP_ID}/b`]!.stack[0]!.pc).toBe(3_999);
   });
 });

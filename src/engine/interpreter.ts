@@ -22,7 +22,7 @@
 // they finish (MV semantics): the victory autorun ends its loop by flipping
 // its self switch, which changes its active page.
 
-import { deepClone } from "./clone.ts";
+import { keyedRecord } from "./clone.ts";
 import type {
   Command,
   CommonEvent,
@@ -37,15 +37,17 @@ import type {
 
 export const TICK_HZ = 60;
 
-/** Maximum number of instructions one fiber may execute inside a single
- *  frame before it is declared non-terminating. Compiler-emitted programs
- *  contain only forward control flow (compile()), so a legal fiber reaches
- *  a wait/modal/external suspension or pops its stack within a bounded
- *  number of steps. The limit is a runtime backstop for a cyclic program
- *  that reached the state by another route (review 1274 B1): exceeding it
- *  records a fatal error on the state instead of throwing, so a frame can
- *  never hang the host frame loop. */
+/** Maximum number of interpreter steps shared by every fiber in one
+ *  stepInterp call. Forward-only local bytecode can still exceed a frame's
+ *  work bound, and common events can recurse across programs. This runtime
+ *  budget is therefore the termination backstop; serialized-program checks
+ *  only reject malformed control flow earlier. Exceeding the budget records
+ *  a fatal state instead of throwing or hanging the host frame loop. */
 export const RUNAWAY_STEP_LIMIT = 10000;
+/** Maximum number of nested choice/common program frames. This bounds a
+ * wait-interleaved recursive common event across host frames as well as an
+ * in-frame recursion before it reaches the step budget. */
+export const MAX_FIBER_STACK_DEPTH = 100;
 
 // --- virtual time -----------------------------------------------------------
 
@@ -96,14 +98,17 @@ export interface SwitchState {
 
 export function createSwitchState(init?: Partial<SwitchState>): SwitchState {
   return {
-    switches: {},
-    self: {},
-    items: {},
-    variables: {},
-    gold: 0,
-    rng: 0x12345678,
-    ...init,
+    switches: keyedRecord(init?.switches),
+    self: keyedRecord(init?.self),
+    items: keyedRecord(init?.items),
+    variables: keyedRecord(init?.variables),
+    gold: init?.gold ?? 0,
+    rng: init?.rng ?? 0x12345678,
   };
+}
+
+function keyedValue<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 // --- conditions and page selection ------------------------------------------
@@ -111,9 +116,9 @@ export function createSwitchState(init?: Partial<SwitchState>): SwitchState {
 export function evalCondition(c: Condition, s: SwitchState, eventKey: string): boolean {
   switch (c.kind) {
     case "switch":
-      return (s.switches[c.id] ?? false) === (c.value ?? true);
+      return (keyedValue(s.switches, c.id) ?? false) === (c.value ?? true);
     case "variable": {
-      const v = s.variables[c.id] ?? 0;
+      const v = keyedValue(s.variables, c.id) ?? 0;
       switch (c.op) {
         case ">=": return v >= c.value;
         case "<=": return v <= c.value;
@@ -123,9 +128,9 @@ export function evalCondition(c: Condition, s: SwitchState, eventKey: string): b
       return false;
     }
     case "selfSwitch":
-      return s.self[eventKey] === c.key;
+      return (keyedValue(s.self, eventKey) === c.key) === (c.value ?? true);
     case "item":
-      return (s.items[c.id] ?? 0) >= c.count;
+      return (keyedValue(s.items, c.id) ?? 0) >= c.count;
     case "gold":
       return s.gold >= c.amount;
   }
@@ -134,17 +139,17 @@ export function evalCondition(c: Condition, s: SwitchState, eventKey: string): b
 export function pageConditionHolds(p: Page, s: SwitchState, eventKey: string): boolean {
   const c = p.condition;
   if (!c) return true;
-  if (c.switch !== undefined && !(s.switches[c.switch] ?? false)) return false;
-  if (c.selfSwitch !== undefined && s.self[eventKey] !== c.selfSwitch) return false;
+  if (c.switch !== undefined && !(keyedValue(s.switches, c.switch) ?? false)) return false;
+  if (c.selfSwitch !== undefined && keyedValue(s.self, eventKey) !== c.selfSwitch) return false;
   if (c.variable) {
-    const v = s.variables[c.variable.id] ?? 0;
+    const v = keyedValue(s.variables, c.variable.id) ?? 0;
     const { op, value } = c.variable;
     if (op === ">=" && !(v >= value)) return false;
     if (op === "<=" && !(v <= value)) return false;
     if (op === "==" && !(v === value)) return false;
     if (op === "!=" && !(v !== value)) return false;
   }
-  if (c.item !== undefined && (s.items[c.item] ?? 0) < 1) return false;
+  if (c.item !== undefined && (keyedValue(s.items, c.item) ?? 0) < 1) return false;
   return true;
 }
 
@@ -417,7 +422,9 @@ interface Fiber {
 export interface World {
   hz: number;
   map: MapDef;
-  commonEvents: Map<string, CommonEvent>;
+  /** Programs are compiled once for this immutable project's id/content. */
+  commonPrograms: ReadonlyMap<string, Prog>;
+  pagePrograms: ReadonlyMap<string, readonly Prog[]>;
 }
 
 export interface InterpError {
@@ -458,14 +465,15 @@ export interface InterpState {
 }
 
 export function createInterpState(sw: SwitchState = createSwitchState()): InterpState {
+  const safeSwitches = createSwitchState(sw);
   return {
     frame: 0,
-    sw,
+    sw: safeSwitches,
     main: null,
-    parallels: {},
+    parallels: keyedRecord(),
     modal: null,
-    erased: {},
-    touched: {},
+    erased: keyedRecord(),
+    touched: keyedRecord(),
     cues: [],
     pendingTransfer: null,
     pendingMoveRoutes: [],
@@ -474,7 +482,13 @@ export function createInterpState(sw: SwitchState = createSwitchState()): Interp
 }
 
 export function createWorld(map: MapDef, common: CommonEvent[] = [], hz: number = TICK_HZ): World {
-  return { hz, map, commonEvents: new Map(common.map((c) => [c.id, c])) };
+  const commonPrograms = new Map<string, Prog>();
+  for (const event of common) commonPrograms.set(event.id, compile(event.commands, hz));
+  const pagePrograms = new Map<string, readonly Prog[]>();
+  for (const event of map.events ?? []) {
+    pagePrograms.set(eventKey(map.id, event.id), event.pages.map((page) => compile(page.commands, hz)));
+  }
+  return { hz, map, commonPrograms, pagePrograms };
 }
 
 /** True while the blocking interpreter owns the session: player movement
@@ -510,23 +524,23 @@ function cloneFiber(f: Fiber): Fiber {
 
 export function cloneInterp(s0: InterpState): InterpState {
   const main = s0.main ? cloneFiber(s0.main) : null;
-  const parallels: Record<string, Fiber> = {};
+  const parallels = keyedRecord<Fiber>();
   for (const key of Object.keys(s0.parallels)) parallels[key] = cloneFiber(s0.parallels[key]!);
   const s: InterpState = {
     frame: s0.frame,
     sw: {
-      switches: { ...s0.sw.switches },
-      self: { ...s0.sw.self },
-      items: { ...s0.sw.items },
-      variables: { ...s0.sw.variables },
+      switches: keyedRecord(s0.sw.switches),
+      self: keyedRecord(s0.sw.self),
+      items: keyedRecord(s0.sw.items),
+      variables: keyedRecord(s0.sw.variables),
       gold: s0.sw.gold,
       rng: s0.sw.rng,
     },
     main,
     parallels,
     modal: cloneModal(s0.modal),
-    erased: { ...s0.erased },
-    touched: { ...s0.touched },
+    erased: keyedRecord(s0.erased),
+    touched: keyedRecord(s0.touched),
     cues: s0.cues.map((cue) => ({ ...cue })),
     pendingTransfer: s0.pendingTransfer ? { ...s0.pendingTransfer } : null,
     pendingMoveRoutes: s0.pendingMoveRoutes.map((r) => ({
@@ -557,15 +571,14 @@ function startFiber(
   s: InterpState,
   key: string,
   pageIndex: number,
-  page: Page,
   parallel: boolean,
-  hz: number,
+  prog: Prog,
 ): Fiber {
   return {
     key,
     pageIndex,
     parallel,
-    stack: [{ prog: compile(page.commands, hz), pc: 0 }],
+    stack: [{ prog, pc: 0 }],
     mode: "run",
     since: s.frame,
     erase: false,
@@ -597,7 +610,8 @@ function cancelStaleParallels(s: InterpState, w: World): void {
 
 function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
   const events = w.map.events ?? [];
-  const cellOf = (ev: GameEvent): Cell => input.eventCells?.[ev.id] ?? ev;
+  const cellOf = (ev: GameEvent): Cell =>
+    (input.eventCells ? keyedValue(input.eventCells, ev.id) : undefined) ?? ev;
   // Release touch latches once the player has walked off the event cell.
   for (const ev of events) {
     const key = eventKey(w.map.id, ev.id);
@@ -618,13 +632,15 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
     // per-frame start/finish spin.
     if (page.commands.length === 0) continue;
     if (page.trigger === "parallel") {
-      if (!s.parallels[key]) s.parallels[key] = startFiber(s, key, index, page, true, w.hz);
+      if (!keyedValue(s.parallels, key)) {
+        s.parallels[key] = startFiber(s, key, index, true, w.pagePrograms.get(key)![index]!);
+      }
       continue;
     }
     if (s.main) continue; // one blocking fiber at a time
     const ec = cellOf(ev);
     if (page.trigger === "autorun") {
-      s.main = startFiber(s, key, index, page, false, w.hz);
+      s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
     } else if (page.trigger === "action" && input.confirmEdge) {
       // MV parity: action button starts the event one tile in FRONT of the
       // player (NPCs block the tile; below-character signs are faced, not
@@ -634,13 +650,13 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
       const [fx, fy] = FRONT[input.facing];
       const front = { x: input.playerCell.x + fx, y: input.playerCell.y + fy };
       if (at(ec, front) || at(ec, input.playerCell)) {
-        s.main = startFiber(s, key, index, page, false, w.hz);
+        s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
       }
     } else if (page.trigger === "playerTouch") {
       const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
       if (at(ec, input.playerCell) && moved && !s.touched[key]) {
         s.touched[key] = true;
-        s.main = startFiber(s, key, index, page, false, w.hz);
+        s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
       }
     }
   }
@@ -699,7 +715,17 @@ function finishFiber(s: InterpState, f: Fiber): void {
   else if (s.main?.key === f.key) s.main = null;
 }
 
-function runFiber(s: InterpState, w: World, f: Fiber, input: InterpInput): void {
+interface StepBudget {
+  remaining: number;
+}
+
+function runFiber(
+  s: InterpState,
+  w: World,
+  f: Fiber,
+  input: InterpInput,
+  budget: StepBudget,
+): void {
   // Resolve already-suspending commands first; on resume the fiber falls
   // through into the run loop so the instant commands after a wait/text/
   // choice apply on the same frame the player released them.
@@ -769,6 +795,10 @@ function runFiber(s: InterpState, w: World, f: Fiber, input: InterpInput): void 
       if (input.confirmEdge) branch = ins.branches[modal.index]!;
       else if (input.cancelEdge && ins.cancel) branch = ins.cancel;
       if (branch) {
+        if (f.stack.length >= MAX_FIBER_STACK_DEPTH) {
+          s.error = { kind: "runaway", message: `interpreter: stack depth exceeded in ${f.key}` };
+          return;
+        }
         s.modal = null;
         top.pc++; // past CHOICES in the parent
         f.stack.unshift({ prog: branch, pc: 0 });
@@ -781,12 +811,11 @@ function runFiber(s: InterpState, w: World, f: Fiber, input: InterpInput): void 
     }
   }
 
-  let guard = 0;
   while (f.mode === "run") {
-    if (++guard > RUNAWAY_STEP_LIMIT) {
-      // Backstop (review 1274 B1): a non-terminating program records a
-      // fatal error on the state and parks the fiber instead of throwing
-      // through the host frame loop. stepInterp freezes on later frames.
+    if (budget.remaining-- <= 0) {
+      // Backstop (reviews 1274 B1 and 1401 B1): all fibers draw from one
+      // step budget. This bounds aggregate parallel work as well as a long
+      // forward program or recursive common-event stack.
       s.error = { kind: "runaway", message: `interpreter: runaway program in ${f.key}` };
       return;
     }
@@ -895,13 +924,17 @@ function runFiber(s: InterpState, w: World, f: Fiber, input: InterpInput): void 
         });
         return;
       case "common": {
-        const common = w.commonEvents.get(ins.id);
-        if (!common) {
+        const prog = w.commonPrograms.get(ins.id);
+        if (!prog) {
           top.pc++; // unknown common event: no-op (MV logs and skips)
           break;
         }
+        if (f.stack.length >= MAX_FIBER_STACK_DEPTH) {
+          s.error = { kind: "runaway", message: `interpreter: stack depth exceeded in ${f.key}` };
+          return;
+        }
         top.pc++;
-        f.stack.unshift({ prog: compile(common.commands, w.hz), pc: 0 });
+        f.stack.unshift({ prog, pc: 0 });
         break;
       }
     }
@@ -914,12 +947,12 @@ export function stepInterp(w: World, s0: InterpState, input: InterpInput): Inter
   // frame clock still ticks so render/host code keeps its cadence, but the
   // cyclic program can never consume another step (review 1274 B1).
   if (s0.error) {
-    const frozen = deepClone(s0);
+    const frozen = cloneInterp(s0);
     frozen.frame = s0.frame + 1;
     frozen.cues = [];
     return frozen;
   }
-  const s: InterpState = deepClone(s0);
+  const s = cloneInterp(s0);
   s.frame = s0.frame + 1;
   s.cues = [];
   // Pending requests live only on the step that issued them: P1④ reads them
@@ -930,21 +963,22 @@ export function stepInterp(w: World, s0: InterpState, input: InterpInput): Inter
 
   cancelStaleParallels(s, w);
   scanTriggers(s, w, input);
+  const budget: StepBudget = { remaining: RUNAWAY_STEP_LIMIT };
 
   // Parallels first (ascending key), then the blocking fiber, so a parallel
   // can never observe a value the main fiber sets later in the same frame.
   for (const key of Object.keys(s.parallels).sort()) {
-    runFiber(s, w, s.parallels[key]!, input);
+    runFiber(s, w, s.parallels[key]!, input, budget);
     if (s.error) return s;
   }
-  if (s.main) runFiber(s, w, s.main, input);
+  if (s.main) runFiber(s, w, s.main, input, budget);
   return s;
 }
 
 /** P1④ entry point: resume a fiber parked on transfer/moveRoute after the
  *  external work (map swap, route walk) has completed. */
 export function continueExternal(s0: InterpState, fiberKey: string): InterpState {
-  const s = deepClone(s0);
+  const s = cloneInterp(s0);
   const resume = (f: Fiber | null): void => {
     if (!f || f.key !== fiberKey || f.mode !== "external") return;
     f.stack[0]!.pc++;

@@ -18,6 +18,7 @@
 // refusal returns a reason string; the caller throws SaveError("shape") and
 // keeps the running session untouched.
 
+import { MAX_FIBER_STACK_DEPTH } from "./interpreter.ts";
 import type { MapDef } from "./types.ts";
 import { isStandable, type PassageTable } from "./passability.ts";
 import type { SaveSnapshot } from "./save.ts";
@@ -80,6 +81,10 @@ export function restoreProblem(
     const wantParallel = fiber.parallel === true;
     if (page.trigger === "parallel" !== wantParallel) {
       return `${path}: fiber parallel flag does not match page trigger "${page.trigger}"`;
+    }
+    const stack = fiber.stack;
+    if (!Array.isArray(stack) || stack.length > MAX_FIBER_STACK_DEPTH) {
+      return `${path}: stack exceeds ${MAX_FIBER_STACK_DEPTH} frames`;
     }
   }
   return null;

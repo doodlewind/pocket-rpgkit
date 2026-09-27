@@ -3,9 +3,11 @@
 // Every event with an active page has a CharState, whether or not the page
 // has a sprite (sprite-less chars are invisible and non-blocking, but a
 // moveRoute command can still move the event). Like movement.ts this is a
-// tile-locked grid walk: one step takes stepFrames frames (8 at 2 px/frame,
-// 60 Hz), decisions happen only on tile-boundary frames, and the walk is a
-// pure fold over the per-frame input with no clock and no Math.random.
+// tile-locked grid walk: one step takes stepFrames MOTION_HZ reference
+// ticks (8 at 2 px/tick), decisions happen only on tile-boundary ticks,
+// and the walk is a pure fold over the per-tick input with no host clock
+// and no Math.random. The host folds 60/simulationHz reference ticks per
+// host frame, so patrol and autonomous motion advance by virtual time.
 //
 // Three motion sources, highest priority first:
 //   1. forced route   — a moveRoute command running NOW. When `waiter`
@@ -29,7 +31,7 @@
 // not lock.
 
 import { activePage, eventKey, randInt, type SwitchState } from "./interpreter.ts";
-import { deepClone } from "./clone.ts";
+import { keyedRecord } from "./clone.ts";
 import { stepPixels, stepFrames, type MovementConfig } from "./movement.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
 import { canStepFrom } from "./passability.ts";
@@ -38,7 +40,7 @@ import type { GameEvent, MapDef, MoveRoute, MoveStep } from "./types.ts";
 const DX = [0, -1, 0, 1] as const; // down, left, up, right
 const DY = [1, 0, -1, 0] as const;
 
-/** Frames between autonomous random/approach decisions. */
+/** MOTION_HZ reference ticks between autonomous random/approach decisions. */
 const THINK_BEATS = 8;
 const IDLE_BEATS = 16;
 /** Approach pages only walk at the player inside this Manhattan radius. */
@@ -57,7 +59,7 @@ export interface RouteRun {
   patrol: boolean;
   /** Fiber key parked until this route finishes; null = fire-and-forget. */
   waiter: string | null;
-  /** Frames left of an in-route wait step. */
+  /** MOTION_HZ reference ticks left of an in-route wait step. */
   waitLeft: number;
 }
 
@@ -68,7 +70,7 @@ export interface CharState {
   px: number;
   py: number;
   facing: Dir4;
-  /** 0 at a tile boundary, 1..stepFrames while interpolating. */
+  /** 0 at a tile boundary, 1..stepFrames reference ticks while interpolating. */
   phase: number;
   moving: boolean;
   stepDir: Dir4;
@@ -94,7 +96,21 @@ export interface CharsState {
 }
 
 export function createChars(rng = 0x5151_5151): CharsState {
-  return { rng, chars: {} };
+  return { rng, chars: keyedRecord() };
+}
+
+function cloneRoute(route: RouteRun | null): RouteRun | null {
+  return route ? { ...route, steps: [...route.steps] } : null;
+}
+
+/** Clone mutable character state while retaining prototype-safe id tables. */
+export function cloneChars(s0: CharsState): CharsState {
+  const chars = keyedRecord<CharState>();
+  for (const id of Object.keys(s0.chars)) {
+    const ch = s0.chars[id]!;
+    chars[id] = { ...ch, route: cloneRoute(ch.route), patrol: cloneRoute(ch.patrol) };
+  }
+  return { rng: s0.rng, chars };
 }
 
 export interface SyncResult {
@@ -104,8 +120,8 @@ export interface SyncResult {
   abortedWaiters: string[];
 }
 
-/** Reconcile characters with the active pages. Called once per frame
- *  before stepChars: creates chars for new active pages, removes chars for
+/** Reconcile characters with the active pages. Called once per reference
+ *  tick before stepChars: creates chars for new active pages, removes chars for
  *  erased events / pages whose condition stopped holding, and rebuilds the
  *  patrol route when the page index changes. */
 export function syncPages(
@@ -115,7 +131,7 @@ export function syncPages(
   cfg: MovementConfig,
   erased: ReadonlySet<string>,
 ): { state: CharsState; result: SyncResult } {
-  const s: CharsState = deepClone(s0);
+  const s = cloneChars(s0);
   const abortedWaiters: string[] = [];
   const live = new Set<string>();
 
@@ -198,7 +214,7 @@ export function installRoute(
   waiter: string | null,
   cfg: MovementConfig,
 ): { state: CharsState; displacedWaiter: string | null } {
-  const s: CharsState = deepClone(s0);
+  const s = cloneChars(s0);
   const ch = s.chars[eventId];
   const displacedWaiter = ch?.route && !ch.route.patrol && ch.route.waiter ? ch.route.waiter : null;
   if (ch) {
@@ -236,7 +252,7 @@ const MOVE: Record<string, Dir4> = {
 export interface PlayerPlace {
   tx: number;
   ty: number;
-  /** Tile the player is stepping INTO this frame (same as tx,ty at rest). */
+  /** Tile the player is stepping INTO this tick (same as tx,ty at rest). */
   destX: number;
   destY: number;
 }
@@ -252,9 +268,9 @@ function occupantBlocks(
 ): boolean {
   // The exit direction is the direction of THIS candidate step; the
   // character's current facing is its pre-turn orientation and must not be
-  // used to look up the target cell's directional block. dirBlock is an
-  // exit mask on the SOURCE cell (where ch stands); canStepFrom checks that
-  // exit and then the destination terrain (review C13).
+  // used to look up the target cell's directional block. canStepFrom checks
+  // BOTH edges of the crossing: the source cell's exit mask and the target
+  // cell's reverse-entry mask (task-1206 dual-edge contract).
   if (!canStepFrom(table, ch.tx, ch.ty, exit)) return true;
   if (tx === player.tx && ty === player.ty) return true;
   if (tx === player.destX && ty === player.destY) return true;
@@ -275,7 +291,7 @@ export function charBlocksPlayer(ch: CharState, tx: number, ty: number): boolean
   return false;
 }
 
-/** Build the per-frame collision predicate the player mover consults
+/** Build the per-tick collision predicate the player mover consults
  *  alongside its PassageTable. */
 export function playerBlockedBy(s: CharsState): (tx: number, ty: number) => boolean {
   const chars = Object.values(s.chars);
@@ -306,11 +322,11 @@ function releaseRoute(ch: CharState, finishedWaiters: string[]): void {
   }
 }
 
-/** One frame for every character, in ascending event-id order so the fold
- *  is deterministic. `locked` names events whose blocking fiber owns the
- *  session (they freeze). `motion` is the active page moveType per event.
- *  Returns waiters whose forced routes FINISHED (or were skipped) on or
- *  before this frame. */
+/** One MOTION_HZ reference tick for every character, in ascending event-id
+ *  order so the fold is deterministic. `locked` names events whose blocking
+ *  fiber owns the session (they freeze). `motion` is the active page
+ *  moveType per event. Returns waiters whose forced routes FINISHED (or were
+ *  skipped) on or before this tick. */
 export function stepChars(
   s0: CharsState,
   table: PassageTable,
@@ -319,7 +335,7 @@ export function stepChars(
   locked: ReadonlySet<string>,
   motion: Readonly<Record<string, MotionType>>,
 ): { state: CharsState; finishedWaiters: string[] } {
-  const s: CharsState = deepClone(s0);
+  const s = cloneChars(s0);
   const frames = stepFrames(cfg);
   const finishedWaiters: string[] = [];
   const others = new Map(Object.entries(s.chars));
@@ -345,7 +361,7 @@ export function stepChars(
       ch.py = ch.ty * cfg.tile;
       ch.phase = 0;
       ch.moving = false;
-      // A non-repeating route ends exactly on the landing frame, so a
+      // A non-repeating route ends exactly on the landing tick, so a
       // waiting fiber resumes as soon as the NPC reaches the last tile.
       if (ch.route && ch.route.pc >= ch.route.steps.length && !ch.route.repeat) {
         releaseRoute(ch, finishedWaiters);
@@ -356,8 +372,8 @@ export function stepChars(
     if (locked.has(ch.id) && !(ch.route && !ch.route.patrol)) continue;
     if (ch.route && ch.route.waitLeft > 0) {
       ch.route.waitLeft--;
-      // The frame the wait expires also takes the next command, so an
-      // N-frame wait plus the following step occupies exactly N+8 frames.
+      // The tick the wait expires also takes the next command, so an
+      // N-tick wait plus the following step occupies exactly N+8 ticks.
       if (ch.route.waitLeft > 0) continue;
     }
 
@@ -368,7 +384,7 @@ export function stepChars(
 
     if (ch.thinkIn > 0) {
       ch.thinkIn--;
-      if (ch.thinkIn > 0) continue; // decide on the frame the pause ends
+      if (ch.thinkIn > 0) continue; // decide on the tick the pause ends
     }
     const kind = motion[id] ?? "static";
     if (kind === "random") randomStep(s, ch, table, player, others, cfg);
@@ -378,8 +394,8 @@ export function stepChars(
   return { state: s, finishedWaiters };
 }
 
-/** Consume exactly ONE route command on this boundary frame (MV advances
- *  its move list at most once per stop frame). */
+/** Consume exactly ONE route command on this boundary tick (MV advances
+ *  its move list at most once per stop tick). */
 function stepRoute(
   s: CharsState,
   ch: CharState,
@@ -435,7 +451,7 @@ function stepRoute(
     ch.facing = dir;
     ch.stepDir = dir;
     if (route.skippable) releaseRoute(ch, finishedWaiters);
-    return; // retry on the next boundary frame
+    return; // retry on the next boundary tick
   }
   commitStep(ch, dir, cfg);
   route.pc++;
@@ -463,7 +479,7 @@ function randomStep(
   const ty = ch.ty + DY[dir];
   if (!occupantBlocks(ch, tx, ty, dir, table, player, others)) {
     commitStep(ch, dir, cfg);
-    // The 8-frame step is its own pacing; no extra think delay on a move.
+    // The 8-tick step is its own pacing; no extra think delay on a move.
     return;
   }
   ch.thinkIn = THINK_BEATS; // blocked: re-roll later

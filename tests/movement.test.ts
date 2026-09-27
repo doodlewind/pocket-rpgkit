@@ -3,7 +3,7 @@
 // clamp, facing, chaining). Pure bun, no host/framework imports.
 
 import { describe, expect, test } from "bun:test";
-import { buildPassage, canEnter, canStepFrom, cellBlocksExit, isStandable, stampBlockedCells, BLOCK, PASS, type Dir4 } from "../src/engine/passability.ts";
+import { buildPassage, canEnter, canStepFrom, cellBlocksEntry, cellBlocksExit, isStandable, stampBlockedCells, BLOCK, PASS, type Dir4 } from "../src/engine/passability.ts";
 import {
   dirFromButtons,
   initialMovement,
@@ -133,31 +133,127 @@ describe("passability", () => {
     expect(canEnter(opened, 1, 1)).toBe(true);
   });
 
-  test("sheet block list and dirBlock exits are honored", () => {
+  test("sheet block list and dirBlock dual edges are honored", () => {
     const sheet: Sheet = {
       id: "town",
       cols: 8,
       rows: 8,
       block: [5],
-      dirBlock: { "9": ["up"] }, // standing ON cell 9 forbids the up exit
+      dirBlock: { "9": ["up"] }, // cell 9 bars its up edge, both ways
     };
     const g = new Array<TileId>(100).fill("town.0");
     g[11] = "town.5"; // (1,1)
     g[12] = "town.9"; // (2,1)
     const { table } = map10(g, undefined, [sheet]);
     expect(canEnter(table, 1, 1, 3)).toBe(false); // block list, any dir
-    // dirBlock is an exit mask on the SOURCE cell, not an entry rule.
-    expect(canEnter(table, 2, 1, 2)).toBe(true); // cell 9 terrain is open
+    // canEnter receives the TARGET cell's entry edge: cell 9's terrain is
+    // open, but entering it through its barred up edge is refused while
+    // every other edge stays open.
+    expect(canEnter(table, 2, 1, 2)).toBe(false); // entry through up barred
+    expect(canEnter(table, 2, 1, 1)).toBe(true); // entry through left open
+    expect(canEnter(table, 2, 1)).toBe(true); // omitted entry ignores dirBlock
     expect(cellBlocksExit(table, 2, 1, 2)).toBe(true); // cannot leave 9 upward
     expect(cellBlocksExit(table, 2, 1, 3)).toBe(false); // leaving 9 right is fine
-    expect(canStepFrom(table, 2, 1, 2)).toBe(false); // full step: up exit barred
+    expect(cellBlocksEntry(table, 2, 1, 2)).toBe(true); // cannot enter 9 from above
+    expect(cellBlocksEntry(table, 2, 1, 1)).toBe(false); // entering from the west is fine
+    expect(canStepFrom(table, 2, 1, 2)).toBe(false); // up exit barred on the source
+    expect(canStepFrom(table, 2, 0, 0)).toBe(false); // step down INTO 9 crosses its up edge
     expect(canStepFrom(table, 2, 1, 3)).toBe(true); // side exit, open target
-    // dirBlock is an ENTRY-exit mask on the source cell; it does not change
-    // direction-agnostic standability. The save-restore gate must accept a
-    // character resting on the cell facing the blocked direction, while a
-    // cell on the block list still rejects standing.
+    expect(canStepFrom(table, 1, 1, 3)).toBe(true); // stepping east INTO 9 crosses its left edge
+    // dirBlock never changes direction-agnostic standability. The
+    // save-restore gate must accept a character resting on the cell facing
+    // the blocked direction, while a cell on the block list rejects standing.
     expect(isStandable(table, 2, 1)).toBe(true);
     expect(isStandable(table, 1, 1)).toBe(false); // block list still rejects
+  });
+
+  test("map.passage pass reopens a target reverse dirBlock edge", () => {
+    const names = ["down", "left", "up", "right"] as const;
+    const opposite = [2, 3, 0, 1] as const;
+    const dx = [0, -1, 0, 1] as const;
+    const dy = [1, 0, -1, 0] as const;
+    for (const dir of [0, 1, 2, 3] as const) {
+      const width = 5;
+      const targetX = 2 + dx[dir];
+      const targetY = 2 + dy[dir];
+      const target = targetY * width + targetX;
+      const ground = new Array<TileId>(width * width).fill("edge.0");
+      ground[target] = "edge.1";
+      const sheet: Sheet = {
+        id: "edge", cols: 2, rows: 1, defaultPassage: "pass",
+        dirBlock: { "1": [names[opposite[dir]]!] },
+      };
+      const map: MapDef = {
+        id: "edge", name: "edge", width, height: width, sheets: [sheet.id], ground,
+        passage: [[target, "pass"]], events: [],
+      };
+      const table = buildPassage(map, new Map([[sheet.id, sheet]]));
+      expect(canStepFrom(table, 2, 2, dir), names[dir]).toBe(true);
+    }
+  });
+
+  describe("dirBlock destination reverse edge", () => {
+    function edgeTable(blocked: "down" | "left" | "up" | "right", target: [number, number] = [2, 1]) {
+      const sheet: Sheet = {
+        id: "town",
+        cols: 2,
+        rows: 1,
+        defaultPassage: "pass",
+        dirBlock: { "1": [blocked] },
+      };
+      const ground = new Array<TileId>(100).fill("town.0");
+      ground[target[1] * 10 + target[0]] = "town.1";
+      return map10(ground, undefined, [sheet]).table;
+    }
+
+    test("rightward entry into a left-blocking target is refused", () => {
+      const table = edgeTable("left");
+      expect(canStepFrom(table, 1, 1, 3)).toBe(false);
+      expect(canStepFrom(table, 2, 1, 1)).toBe(false);
+      expect(canStepFrom(table, 2, 1, 0)).toBe(true);
+      expect(canStepFrom(table, 2, 1, 2)).toBe(true);
+      expect(canStepFrom(table, 2, 1, 3)).toBe(true);
+    });
+
+    test("a right-blocking target does not stop rightward entry (the mask seals the far edge)", () => {
+      const table = edgeTable("right");
+      expect(canStepFrom(table, 1, 1, 3)).toBe(true);
+      expect(canStepFrom(table, 3, 1, 1)).toBe(false);
+    });
+
+    test("every direction: entry is refused only across the target's reverse edge", () => {
+      const cases: ReadonlyArray<{
+        dir: Dir4;
+        from: [number, number];
+        target: [number, number];
+        blocks: "down" | "left" | "up" | "right";
+        open: "down" | "left" | "up" | "right";
+      }> = [
+        { dir: 0, from: [5, 4], target: [5, 5], blocks: "up", open: "down" },
+        { dir: 1, from: [6, 5], target: [5, 5], blocks: "right", open: "left" },
+        { dir: 2, from: [5, 6], target: [5, 5], blocks: "down", open: "up" },
+        { dir: 3, from: [4, 5], target: [5, 5], blocks: "left", open: "right" },
+      ];
+      for (const entry of cases) {
+        expect(canStepFrom(edgeTable(entry.blocks, entry.target), ...entry.from, entry.dir)).toBe(false);
+        expect(canStepFrom(edgeTable(entry.open, entry.target), ...entry.from, entry.dir)).toBe(true);
+      }
+    });
+
+    test("canEnter keeps terrain semantics: the edge mask is not an enterability opinion", () => {
+      const table = edgeTable("left");
+      expect(canEnter(table, 2, 1, 3)).toBe(true);
+      expect(cellBlocksExit(table, 2, 1, 1)).toBe(true);
+    });
+
+    test("the mover refuses a rightward press into a left-blocking tile: turn only, no pixels", () => {
+      const stopped = stepMovement(initialMovement(1, 1, 3, CFG), BTN_BITS.RIGHT, edgeTable("left"), CFG);
+      expect({ tx: stopped.tx, px: stopped.px, moving: stopped.moving })
+        .toEqual({ tx: 1, px: 16, moving: false });
+      const moving = stepMovement(initialMovement(1, 1, 3, CFG), BTN_BITS.RIGHT, edgeTable("right"), CFG);
+      expect({ tx: moving.tx, px: moving.px, moving: moving.moving })
+        .toEqual({ tx: 1, px: 18, moving: true });
+    });
   });
 
   test("a passage override outside the map throws at build time", () => {
@@ -366,13 +462,13 @@ describe("tile movement — chaining and facing", () => {
   });
 });
 
-// --- directional passage exits over the reducer (task-1206, C13 model) -----
-// dirBlock is authored on the SOURCE tile as an exit mask. These keep the
-// task-1206 end-to-end intent (the mover halts at a tile whose next exit is
-// barred) under the C13 semantics; the old "destination's opposite entry
-// edge blocks" reading was superseded and is intentionally not asserted.
+// --- directional passage over the reducer (task-1206 dual-edge contract) ---
+// A dirBlock entry authored on one tile guards BOTH sides of an edge: as a
+// source cell it forbids LEAVING through the named edge, and as a target
+// cell it forbids ENTERING through that edge from outside. Walking east
+// checks the source's "right" edge and the target's "left" edge.
 
-function exitTable(flaggedX: number, blocked: Dir4[]) {
+function directionalTable(flaggedX: number, blocked: Dir4[]) {
   const width = 5;
   const ground = new Array<TileId>(width * 3).fill("town.0");
   ground[width + flaggedX] = "town.9";
@@ -388,31 +484,106 @@ function exitTable(flaggedX: number, blocked: Dir4[]) {
   return buildPassage(map, new Map([[sheet.id, sheet]]));
 }
 
-describe("directional passage exits (task-1206, source-cell exit mask)", () => {
+describe("directional passage (task-1206: source exit and target entry edges)", () => {
+  test("checks the source exit and destination entry edge for a single step", () => {
+    const start = initialMovement(1, 1, 3, CFG);
+
+    const sourceBlocked = stepMovement(
+      start,
+      BTN_BITS.RIGHT,
+      directionalTable(1, [3]),
+      CFG,
+    );
+    expect({ tx: sourceBlocked.tx, px: sourceBlocked.px, moving: sourceBlocked.moving }).toEqual({
+      tx: 1,
+      px: 16,
+      moving: false,
+    });
+
+    const unrelatedTargetEdge = stepMovement(
+      start,
+      BTN_BITS.RIGHT,
+      directionalTable(2, [3]),
+      CFG,
+    );
+    expect({ px: unrelatedTargetEdge.px, moving: unrelatedTargetEdge.moving }).toEqual({
+      px: 18,
+      moving: true,
+    });
+
+    // Task-1206 regression: the target's opposite edge blocks entry.
+    const targetEntryBlocked = stepMovement(
+      start,
+      BTN_BITS.RIGHT,
+      directionalTable(2, [1]),
+      CFG,
+    );
+    expect({ tx: targetEntryBlocked.tx, px: targetEntryBlocked.px, moving: targetEntryBlocked.moving }).toEqual({
+      tx: 1,
+      px: 16,
+      moving: false,
+    });
+  });
+
   test("a barred source exit turns the mover in place without moving", () => {
     const start = initialMovement(1, 1, 3, CFG);
-    const out = stepMovement(start, BTN_BITS.RIGHT, exitTable(1, [3]), CFG);
+    const out = stepMovement(start, BTN_BITS.RIGHT, directionalTable(1, [3]), CFG);
     expect({ tx: out.tx, px: out.px, moving: out.moving, facing: out.facing }).toEqual({
       tx: 1, px: 16, moving: false, facing: 3,
     });
   });
 
-  test("a neighbour's barred exit does not stop me ENTERING it", () => {
-    // Cell 2 forbids leaving UPWARD; walking right into it is still legal
-    // (the exit mask is consulted on the cell being left, not entered).
+  test("a neighbour's unrelated barred edge does not stop me ENTERING it", () => {
+    // Cell 2 forbids crossing its UP edge; walking right into it crosses its
+    // LEFT edge, which stays open.
     const start = initialMovement(1, 1, 3, CFG);
-    const out = stepMovement(start, BTN_BITS.RIGHT, exitTable(2, [2]), CFG);
+    const out = stepMovement(start, BTN_BITS.RIGHT, directionalTable(2, [2]), CFG);
     expect({ px: out.px, moving: out.moving }).toEqual({ px: 18, moving: true });
   });
 
-  test("held input walks onto the flagged tile and halts at the barred exit", () => {
-    const table = exitTable(2, [3]); // cannot leave cell 2 to the right
-    let s = initialMovement(1, 1, 3, CFG);
-    for (let f = 0; f < STEP; f++) s = stepMovement(s, BTN_BITS.RIGHT, table, CFG);
-    expect({ tx: s.tx, px: s.px, moving: s.moving }).toEqual({ tx: 2, px: 32, moving: false });
-    for (let f = 0; f < STEP * 2; f++) s = stepMovement(s, BTN_BITS.RIGHT, table, CFG);
-    expect({ tx: s.tx, px: s.px, moving: s.moving, walking: s.walking }).toEqual({
-      tx: 2, px: 32, moving: false, walking: false,
+  test("a target cell that bars its left edge refuses entry from the west", () => {
+    const start = initialMovement(1, 1, 3, CFG);
+    const out = stepMovement(start, BTN_BITS.RIGHT, directionalTable(2, [1]), CFG);
+    expect({ tx: out.tx, px: out.px, moving: out.moving, facing: out.facing }).toEqual({
+      tx: 1, px: 16, moving: false, facing: 3,
+    });
+  });
+
+  test("held input stops on arrival when the next source exit is blocked", () => {
+    const table = directionalTable(2, [3]);
+    let state = initialMovement(1, 1, 3, CFG);
+
+    for (let frame = 0; frame < STEP; frame++) {
+      state = stepMovement(state, BTN_BITS.RIGHT, table, CFG);
+    }
+    expect({ tx: state.tx, px: state.px, moving: state.moving, walking: state.walking }).toEqual({
+      tx: 2,
+      px: 32,
+      moving: false,
+      walking: false,
+    });
+
+    for (let frame = 0; frame < STEP * 2; frame++) {
+      state = stepMovement(state, BTN_BITS.RIGHT, table, CFG);
+    }
+    expect({ tx: state.tx, px: state.px, moving: state.moving, walking: state.walking }).toEqual({
+      tx: 2,
+      px: 32,
+      moving: false,
+      walking: false,
+    });
+  });
+
+  test("held input never crosses a target cell's barred reverse entry", () => {
+    const table = directionalTable(2, [1]); // cell 2 keeps movers out from the west
+    let state = initialMovement(1, 1, 3, CFG);
+    for (let frame = 0; frame < STEP * 3; frame++) {
+      state = stepMovement(state, BTN_BITS.RIGHT, table, CFG);
+    }
+    expect({ tx: state.tx, px: state.px, moving: state.moving }).toEqual({
+      tx: 1,
+      px: 16,
+      moving: false,
     });
   });
 });

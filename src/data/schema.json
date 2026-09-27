@@ -81,7 +81,7 @@
             "minItems": 1,
             "uniqueItems": true
           },
-          "description": "Map key is the cell index (as string); value lists blocked exit directions."
+          "description": "Map key is the cell index (as string); value lists the cell's blocked edge directions: each blocks both leaving that cell through the edge and entering it through that edge from outside."
         }
       }
     },
@@ -189,7 +189,7 @@
       "additionalProperties": false,
       "required": ["id", "x", "y", "pages"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
         "name": { "type": "string" },
         "x": { "type": "integer", "minimum": 0 },
         "y": { "type": "integer", "minimum": 0 },
@@ -294,7 +294,7 @@
           "required": ["op", "id", "value"],
           "properties": {
             "op": { "const": "switch" },
-            "id": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
+            "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
             "value": { "type": "boolean" }
           }
         },
@@ -304,7 +304,7 @@
           "required": ["op", "id", "set"],
           "properties": {
             "op": { "const": "variable" },
-            "id": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
+            "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
             "set": {
               "oneOf": [
                 { "type": "object", "additionalProperties": false, "required": ["op", "value"],

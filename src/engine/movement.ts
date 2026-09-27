@@ -1,28 +1,34 @@
 // src/engine/movement.ts — tile-locked grid movement for P1②.
 //
 // The mover walks the tile grid: a d-pad press commits ONE tile and the
-// following frames interpolate to it at a fixed px/frame (8 frames per
-// 16px tile at 2 px/frame, 60 Hz). Input pressed mid-step is read at the
-// next tile boundary, so held directions chain into continuous walking
-// and a tap cannot cut a step short. Every step takes exactly
-// tile/speed frames, chained steps included: the press frame renders the
+// following REFERENCE TICKS interpolate to it at a fixed px per reference
+// tick (8 ticks per 16px tile at 2 px/tick). Input pressed mid-step is read
+// at the next tile boundary, so held directions chain into continuous
+// walking and a tap cannot cut a step short. Every step takes exactly
+// tile/speed ticks, chained steps included: the press tick renders the
 // first 2px, phase advances 1..8, and phase 8 collapses onto the
 // destination boundary. Collision is decided per tile BEFORE the step
 // starts, against a cooked PassageTable: a blocked target (map edge,
-// void ground, sheet flag, passage override) turns the mover in place
-// but does not move it. Diagonal holds use the same fixed priority as
-// the P1① camera reducer (vertical wins, deterministic tapes).
+// void ground, sheet flag, passage override, a dirBlock edge) turns the
+// mover in place but does not move it. Diagonal holds use the same fixed
+// priority as the P1① camera reducer (vertical wins, deterministic tapes).
+//
+// A reference tick is the fixed 60 ticks-per-virtual-second motion clock
+// (motion-clock.ts MOTION_HZ), NOT a host frame. One stepMovement call is
+// one reference tick; the host folds (session.stepSession) 60/simulationHz
+// of them per host frame at rates below 60 Hz, so the 2 px/tick policy is
+// 120 px per virtual second at every host rate.
 //
 // Two booleans drive the walk animation:
 //   moving  — a step is interpolating right now (pixel offset != origin)
 //   walking — the mover is engaged: arrival keeps walking true while the
 //             held direction stays open, so chained steps never rebind
 //             the sprite; the core's 4-cell x 2-vblank atlas cycle is
-//             exactly 8 frames, one tile, and stays phase-aligned by
-//             itself. walking drops on release or a blocked next tile.
+//             exactly 8 reference ticks, one tile, and stays phase-aligned
+//             by itself. walking drops on release or a blocked next tile.
 //
 // Pure TS, pure fold: stepMovement returns a new state, reads no clock,
-// and is driven only by the per-frame BTN mask (docs/SIMULATION.md).
+// and is driven only by the per-reference-tick BTN mask (docs/SIMULATION.md).
 
 import { BTN_BITS } from "./camera.ts";
 import { canStepFrom, type Dir4, type PassageTable } from "./passability.ts";
@@ -30,7 +36,7 @@ import { canStepFrom, type Dir4, type PassageTable } from "./passability.ts";
 export interface MovementConfig {
   /** Tile edge in pixels (project.tileSize, 16). */
   tile: number;
-  /** Pixels per frame at 60 Hz; tile must divide evenly by speed. */
+  /** Pixels per MOTION_HZ reference tick; tile must divide evenly by speed. */
   speed: number;
 }
 
@@ -43,7 +49,7 @@ export interface MovementState {
   px: number;
   py: number;
   facing: Dir4;
-  /** Frames accumulated in the current step: 0 at a tile boundary,
+  /** Reference ticks accumulated in the current step: 0 at a tile boundary,
    *  1..stepFrames while moving (stepFrames collapses to 0 on arrival). */
   phase: number;
   moving: boolean;
@@ -83,7 +89,7 @@ const DY: readonly number[] = [1, 0, -1, 0];
 
 /** Walker pose for a step phase: 0 = two-foot idle stance, 1 = the
  *  left/back extreme, 2 = the right/front extreme. The baked atlas cycle
- *  is [idle, L, idle, R] indexed by floor(phase/2), so an 8-frame tile
+ *  is [idle, L, idle, R] indexed by floor(phase/2), so an 8-tick tile
  *  renders idle, L, L, idle, idle, R, R — the same cells a core auto-play
  *  atlas showed on a straight walk, but derived from the SAVED mover phase
  *  instead of a host frame clock the save cannot carry, so a restore at any
@@ -121,13 +127,14 @@ export function stepPixels(
 }
 
 function canStep(s: MovementState, dir: Dir4, table: PassageTable): boolean {
-  // dirBlock is authored on the SOURCE tile as an exit mask; canStepFrom
-  // checks that before testing the destination cell (review C13).
+  // dirBlock is authored on a tile but guards both edges of a crossing:
+  // canStepFrom checks the source exit AND the target's reverse entry.
   return canStepFrom(table, s.tx, s.ty, dir);
 }
 
-/** One frame. `table` is the map's cooked PassageTable; blocked targets
- *  stop the mover at the boundary and apply only the facing turn. */
+/** One MOTION_HZ reference tick. `table` is the map's cooked PassageTable;
+ *  blocked targets stop the mover at the boundary and apply only the
+ *  facing turn. */
 export function stepMovement(
   s: MovementState,
   buttons: number,
@@ -145,10 +152,10 @@ export function stepMovement(
     // Arrival at phase 8: snap to the destination boundary. walking
     // stays true only while the held direction can continue, so a
     // chained step keeps the walker engaged and a wall/release shows idle
-    // starting on this frame. An open turn keeps the COMPLETED step's
+    // starting on this tick. An open turn keeps the COMPLETED step's
     // facing while the mover waits at the boundary: the resting branch
-    // applies the new facing on the step's first displaced frame, so the
-    // turned pose is not bound one frame before that step begins
+    // applies the new facing on the step's first displaced tick, so the
+    // turned pose is not bound one tick before that step begins
     // (task-1207 walker phase after turns).
     const tx = s.tx + DX[s.stepDir];
     const ty = s.ty + DY[s.stepDir];
@@ -176,7 +183,7 @@ export function stepMovement(
     // Blocked: turn in place, engagement drops.
     return s.facing === dir && !s.walking ? s : { ...s, facing: dir, walking: false };
   }
-  // Commit the step: the press frame renders the first 2px.
+  // Commit the step: the press tick renders the first 2px.
   const { px, py } = stepPixels(s.tx * cfg.tile, s.ty * cfg.tile, dir, 1, cfg);
   return { ...s, facing: dir, moving: true, walking: true, phase: 1, stepDir: dir, px, py };
 }

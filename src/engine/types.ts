@@ -3,7 +3,7 @@
 // widens to the event vocabulary the interpreter consumes (R2 report §2–3):
 // pages, triggers, the 15-op command list, page conditions. The interpreter
 // (interpreter.ts) is a pure fold over these types: no host imports. P1②
-// adds the sheet dirBlock exit mask consumed by passability.ts.
+// adds the sheet dirBlock directional masks consumed by passability.ts.
 
 export type Dir = "down" | "left" | "right" | "up";
 
@@ -24,7 +24,9 @@ export interface Sheet {
   defaultPassage?: "pass" | "block";
   block?: number[];
   pass?: number[];
-  /** Cell index (as string) -> exit directions that cell forbids (P1②). */
+  /** Cell index (as string) -> directions of the edges that cell forbids
+   *  crossing: the mask blocks LEAVING that cell through a named edge and
+   *  ENTERING it through that same edge from outside (P1②, task-1206). */
   dirBlock?: Record<string, Dir[]>;
 }
 

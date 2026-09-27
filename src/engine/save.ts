@@ -26,6 +26,7 @@
 import type { MovementState } from "./movement.ts";
 import type { InterpState } from "./interpreter.ts";
 import { cloneInterp, isBusy } from "./interpreter.ts";
+import { keyedRecord } from "./clone.ts";
 import { envelopeConsistent, validateSnapshot } from "./save-validate.ts";
 
 export const SAVE_FORMAT = "rpgkit-save/v1" as const;
@@ -171,7 +172,7 @@ export function canonicalJson(value: unknown): string {
 function stringifyCanonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stringifyCanonical);
   if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out = keyedRecord<unknown>();
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
       out[key] = stringifyCanonical((value as Record<string, unknown>)[key]);
     }
@@ -321,7 +322,10 @@ export function decodeEnvelopeText(text: string): SaveSnapshot {
   if (!envelopeConsistent(envelope as unknown as Record<string, unknown>, snapshot as unknown as Record<string, unknown>)) {
     throw new SaveError("shape", "save envelope frame does not match the state clock");
   }
-  return snapshot;
+  // JSON.parse returns ordinary objects. Re-clone before exposing the state
+  // so legacy v1 saves keep the same wire bytes while every external-id
+  // dictionary regains the runtime's null prototype.
+  return cloneSnapshot(snapshot);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

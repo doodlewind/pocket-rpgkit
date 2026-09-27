@@ -1,8 +1,15 @@
 // src/engine/session.ts — P1④ multi-map session.
 //
-// One pure fold per virtual frame over the whole project:
+// One pure fold over the whole project on the fixed MOTION_HZ reference
+// (motion-clock.ts, 60 ticks per virtual second):
 //
 //   mover (movement.ts) ─▶ characters (chars.ts) ─▶ interpreter
+//
+// stepSession is called once per HOST virtual frame but advances
+// MOTION_HZ/simulationHz reference ticks per call (two at 30 Hz, three at
+// 20 Hz, fifteen at 4 Hz). Motion, waits, the typewriter and fades are then
+// functions of virtual time and agree at every host rate. Input edges are
+// one host frame wide and reach only the first reference tick of a batch.
 //
 // plus the two P1④ mechanics:
 //
@@ -14,20 +21,21 @@
 //                 the parking fiber ends at the transfer (every authored
 //                 transfer is the terminal command of its page). With
 //                 fade>0 the swap happens behind a black overlay:
-//                 fade-out half, swap on the first fully-black frame,
-//                 fade-in half.
+//                 fade-out half, swap on the first fully-black reference
+//                 tick, fade-in half.
 //   moveRoute   — a command-published route installs on its character
 //                 (chars.ts). A wait:true fiber parks in the interpreter's
 //                 "external" mode until the route lands, then the session
 //                 resumes it with continueExternal. Page switches abort
-//                 the route and resume the waiter on the same frame.
+//                 the route and resume the waiter on the same tick.
 //
 // No host imports, no wall clock, no Math.random (docs/SIMULATION.md).
 
-import { deepClone } from "./clone.ts";
+import { keyedRecord } from "./clone.ts";
 
 import {
   activePage,
+  cloneInterp,
   continueExternal,
   createInterpState,
   createWorld,
@@ -41,9 +49,9 @@ import {
 } from "./interpreter.ts";
 import {
   charCell,
+  cloneChars,
   createChars,
   installRoute,
-  playerBlockedBy,
   stepChars,
   syncPages,
   type CharsState,
@@ -57,8 +65,9 @@ import {
   type MovementConfig,
   type MovementState,
 } from "./movement.ts";
+import { MOTION_HZ, motionTicksPerFrame } from "./motion-clock.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
-import { BLOCK, buildPassage, canStepFrom } from "./passability.ts";
+import { buildPassage, canStepFrom, stampBlockedCells } from "./passability.ts";
 import type { Dir, Facing, MapDef, MoveStep, Project, Sheet } from "./types.ts";
 
 const DX = [0, -1, 0, 1] as const;
@@ -81,13 +90,13 @@ interface PlayerRoute {
   skippable: boolean;
   waiter: string | null;
   /** 0 idle at boundary; 1..stepFrames while stepping; negative counts a
-   *  pending wait (-frames..-1). */
+   *  pending wait (-ticks..-1), all in MOTION_HZ reference ticks. */
   phase: number;
   dir: Dir4;
   /** The route installed while the mover was mid-step. It takes over on
-   *  the next frame: the inherited interpolation snaps back to its origin
-   *  boundary before the first route command, so a command face cannot
-   *  redirect the committed step into an unchecked cell. */
+   *  the next reference tick: the inherited interpolation snaps back to its
+   *  origin boundary before the first route command, so a command face
+   *  cannot redirect the committed step into an unchecked cell. */
   takeOver: boolean;
 }
 
@@ -112,19 +121,34 @@ export interface SessionInput {
 
 export interface Session {
   cfg: MovementConfig;
+  /** Host virtual frames per second. */
+  hz: number;
+  /** Fixed-rate reference ticks folded per host frame (MOTION_HZ / hz). */
+  ticksPerFrame: number;
   maps: ReadonlyMap<string, MapDef>;
   worlds: ReadonlyMap<string, ReturnType<typeof createWorld>>;
   tables: ReadonlyMap<string, PassageTable>;
 }
 
-export function createSession(project: Project, hz: number = 60): Session {
+export function createSession(project: Project, hz: number = MOTION_HZ): Session {
   const sheets = new Map<string, Sheet>(project.sheets.map((s) => [s.id, s]));
   const maps = new Map<string, MapDef>(project.maps.map((m) => [m.id, m]));
+  // Interpreter worlds compile at the FIXED motion reference: waits, text
+  // reveal and fade frames are counted in reference ticks, and stepSession
+  // folds MOTION_HZ/hz of them per host frame. Authored time then means the
+  // same virtual time at every host rate.
   const worlds = new Map(
-    project.maps.map((m) => [m.id, createWorld(m, project.commonEvents ?? [], hz)]),
+    project.maps.map((m) => [m.id, createWorld(m, project.commonEvents ?? [], MOTION_HZ)]),
   );
   const tables = new Map(project.maps.map((m) => [m.id, buildPassage(m, sheets)]));
-  return { cfg: { tile: project.tileSize, speed: 2 }, maps, worlds, tables };
+  return {
+    cfg: { tile: project.tileSize, speed: 2 },
+    hz,
+    ticksPerFrame: motionTicksPerFrame(hz),
+    maps,
+    worlds,
+    tables,
+  };
 }
 
 export function startSession(
@@ -181,24 +205,28 @@ function enterMap(
   s.playerRoute = null;
 }
 
-/** The baked map table plus blocking-character bodies, stamped into a
- *  fresh override buffer (maps are at most a few hundred cells). A body
+/** The baked map table plus blocking-character bodies, held as a sparse
+ *  set of occupied row-major cells. A body
  *  blocks regardless of the terrain opinion under it: a map.passage
  *  "pass" override reopens terrain (a gate through a fence), it never
  *  lets the mover walk through a blocks:true character standing there. */
-function tableWithBodies(base: PassageTable, chars: CharsState): PassageTable {
-  const overrides = new Int8Array(base.overrides);
-  const blocked = playerBlockedBy(chars);
-  for (let i = 0; i < overrides.length; i++) {
-    if (overrides[i] !== BLOCK && blocked(i % base.width, Math.floor(i / base.width))) {
-      overrides[i] = BLOCK;
+export function tableWithBodies(base: PassageTable, chars: CharsState): PassageTable {
+  const cells: number[] = [];
+  const add = (x: number, y: number): void => {
+    if (x >= 0 && y >= 0 && x < base.width && y < base.height) {
+      cells.push(y * base.width + x);
     }
+  };
+  for (const ch of Object.values(chars.chars)) {
+    if (!ch.blocks) continue;
+    add(ch.tx, ch.ty);
+    if (ch.moving) add(ch.tx + DX[ch.stepDir], ch.ty + DY[ch.stepDir]);
   }
-  return { ...base, overrides };
+  return stampBlockedCells(base, cells);
 }
 
 function motionOf(map: MapDef, sw: SwitchState): Record<string, MotionType> {
-  const out: Record<string, MotionType> = {};
+  const out = keyedRecord<MotionType>();
   for (const ev of map.events ?? []) {
     const active = activePage(ev, sw, map.id);
     if (active) out[ev.id] = active.page.moveType ?? "static";
@@ -217,34 +245,78 @@ export function fadeOpacity(fade: FadeState | null): number {
   return fade.phase === "out" ? 1 - fade.left / fade.half : fade.left / fade.half;
 }
 
-/** One virtual frame. Pure: returns a NEW SessionState. */
+/** One host virtual frame. The fold runs on the fixed MOTION_HZ reference:
+ *  every host frame folds MOTION_HZ/hz reference ticks — two at 30 Hz,
+ *  three at 20 Hz, fifteen at 4 Hz. Motion, waits, text and fades are
+ *  therefore functions of virtual time and agree at every host rate. Input
+ *  edges are one host frame wide and are delivered only on the FIRST
+ *  reference tick of a batch; the remaining ticks reuse the held button
+ *  mask with no edges. Pure: returns a NEW SessionState. */
 export function stepSession(
   sess: Session,
   s0: SessionState,
   input: SessionInput,
 ): SessionState {
-  const s: SessionState = deepClone(s0);
+  const interp = cloneInterp(s0.interp);
+  const s: SessionState = {
+    frame: s0.frame,
+    mapId: s0.mapId,
+    sw: interp.sw,
+    move: { ...s0.move },
+    chars: cloneChars(s0.chars),
+    interp,
+    fade: s0.fade ? { ...s0.fade } : null,
+    playerRoute: s0.playerRoute
+      ? { ...s0.playerRoute, steps: [...s0.playerRoute.steps] }
+      : null,
+  };
   s.frame++;
+  const ticks = sess.ticksPerFrame;
+
+  let prevCell = { x: s.move.tx, y: s.move.ty };
+  for (let tick = 0; tick < ticks; tick++) {
+    const tickInput: SessionInput =
+      tick === 0
+        ? input
+        : { buttons: input.buttons, confirmEdge: false, cancelEdge: false, upEdge: false, downEdge: false };
+    const nextCell = stepReferenceTick(sess, s, tickInput, prevCell);
+    prevCell = nextCell;
+    // A fatalized interpreter freezes the playfield for the rest of the
+    // batch (review 1274 B1): reference clock keeps advancing, the fold
+    // does not.
+    if (s.interp.error) break;
+  }
+  return s;
+}
+
+/** Advance the session one MOTION_HZ reference tick, mutating the working
+ *  clone `s`. Returns the player cell the next tick sees as prevCell. */
+function stepReferenceTick(
+  sess: Session,
+  s: SessionState,
+  input: SessionInput,
+  prevCellIn: { x: number; y: number },
+): { x: number; y: number } {
   const map = sess.maps.get(s.mapId)!;
 
   // -- fade: gameplay and input freeze while the overlay moves -----------
   if (s.fade) {
     s.fade.left--;
-    if (s.fade.left > 0) return s;
+    if (s.fade.left > 0) return { x: s.move.tx, y: s.move.ty };
     if (s.fade.phase === "out") {
       const t = s.interp.pendingTransfer;
       if (t) applyTransfer(sess, s, t.map, t.x, t.y, t.dir);
       s.fade = { phase: "in", left: s.fade.half, half: s.fade.half };
-      return s;
+      return { x: s.move.tx, y: s.move.ty };
     }
     s.fade = null;
-    return s;
+    return { x: s.move.tx, y: s.move.ty };
   }
 
   // A fatal interpreter error freezes the playfield (review 1274 B1): the
   // clock advances but no mover, character, or interpreter fold runs, so a
-  // cyclic program cannot consume steps or keep throwing frame after frame.
-  if (s.interp.error) return s;
+  // cyclic program cannot consume steps or keep throwing tick after tick.
+  if (s.interp.error) return { x: s.move.tx, y: s.move.ty };
 
   // 1. Reconcile NPC pages. A page switch (or an event that went away)
   //    aborts any forced route parked on it; resume the waiter so the
@@ -293,7 +365,7 @@ export function stepSession(
   if (s.playerRoute) stepPlayerRoute(s, sess);
 
   // 4. Interpreter — live NPC cells feed the trigger scan.
-  const eventCells: Record<string, { x: number; y: number }> = {};
+  const eventCells = keyedRecord<{ x: number; y: number }>();
   for (const ev of map.events ?? []) eventCells[ev.id] = charCell(s.chars, ev);
   const interpInput: InterpInput = {
     confirmEdge: input.confirmEdge,
@@ -301,17 +373,17 @@ export function stepSession(
     upEdge: input.upEdge,
     downEdge: input.downEdge,
     playerCell: { x: s.move.tx, y: s.move.ty },
-    prevCell: { x: s0.move.tx, y: s0.move.ty },
+    prevCell: prevCellIn,
     facing: s.move.facing,
     eventCells,
   };
   s.interp = stepInterp(sess.worlds.get(s.mapId)!, s.interp, interpInput);
-  // stepInterp folds over a deepClone snapshot, so the switch bank it
+  // stepInterp clones the mutable interpreter state, so the switch bank it
   // returns is a new object; re-alias the session's top-level bank to it so
-  // the values chars/motion read next frame are the ones commands just wrote.
+  // the values chars/motion read next tick are the ones commands just wrote.
   s.sw = s.interp.sw;
 
-  // A page-scoped parallel canceled this frame may have owned a waited
+  // A page-scoped parallel canceled this tick may have owned a waited
   // player route: drop it without resuming the dead waiter. The event-side
   // half is torn down by syncPages (the character's page went away).
   if (s.playerRoute && s.playerRoute.waiter && s.interp.abortedRoutes.includes(s.playerRoute.waiter)) {
@@ -364,7 +436,7 @@ export function stepSession(
       applyTransfer(sess, s, t.map, t.x, t.y, t.dir);
     }
   }
-  return s;
+  return { x: s.move.tx, y: s.move.ty };
 }
 
 function applyTransfer(
@@ -384,10 +456,10 @@ function applyTransfer(
 // Player forced route (moveRoute target:"player")
 //
 // Reuses the mover's interpolation (stepPixels, stepFrames): a route step
-// commits one 8-frame tile step. Faces apply on the boundary frame; waits
-// park for one step's worth of frames; a blocked non-skippable move is
-// retried on the next frame. A repeat:false route resumes its waiter on
-// the landing frame of the last step.
+// commits one 8-reference-tick tile step. Faces apply on the boundary tick;
+// waits park for one step's worth of ticks; a blocked non-skippable move is
+// retried on the next tick. A repeat:false route resumes its waiter on the
+// landing tick of the last step.
 // ---------------------------------------------------------------------------
 
 const FACE: Partial<Record<MoveStep, Dir4>> = {
@@ -429,7 +501,7 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
   const frames = stepFrames(cfg);
   const m = s.move;
 
-  // First frame owning a route installed mid-step: cancel the inherited
+  // First tick owning a route installed mid-step: cancel the inherited
   // interpolation and resume from its origin boundary.
   if (r.takeOver) {
     r.takeOver = false;
@@ -457,14 +529,14 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
     m.stepDir = r.dir;
     m.moving = false;
     r.phase = 0;
-    // fall through to the next command on this landing frame
+    // fall through to the next command on this landing tick
   }
 
   const table = tableWithBodies(sess.tables.get(s.mapId)!, s.chars);
-  // MV advances a move list at most once per stop frame: consume exactly
-  // ONE route command on this boundary frame (matching chars.stepRoute).
+  // MV advances a move list at most once per stop tick: consume exactly
+  // ONE route command on this reference tick (matching chars.stepRoute).
   // Instant-only routes (a repeat face route) therefore take one command
-  // per frame and never spin the runaway guard.
+  // per reference tick and never spin the runaway guard.
   const step = r.steps[r.pc];
   if (step === undefined) {
     endPlayerRoute(s);
@@ -504,7 +576,7 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
     r.phase = -frames;
     r.pc++;
     if (r.repeat && r.pc >= r.steps.length) r.pc = 0;
-    // Non-repeat: pc rests at length; the boundary frame after the wait
+    // Non-repeat: pc rests at length; the reference tick after the wait
     // hits the undefined branch above and releases the waiter.
     return;
   }
@@ -517,9 +589,10 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
   m.facing = dir;
   m.stepDir = dir;
   if (!canStepFrom(table, m.tx, m.ty, dir)) {
-    // Blocked (a source-cell dirBlock exit or an unenterable target):
-    // retry on the next boundary frame, unless the route is skippable
-    // (MV MoveRoute "skip if cannot move").
+    // Blocked: the source cell's exit or the target's reverse entry is
+    // dirBlocked, or the target terrain is unenterable. Retry on the next
+    // reference tick, unless the route is skippable (MV MoveRoute
+    // "skip if cannot move").
     if (r.skippable) endPlayerRoute(s);
     return;
   }

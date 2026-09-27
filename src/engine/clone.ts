@@ -15,9 +15,29 @@ export function deepClone<T>(v: T): T {
     return out as T;
   }
   const src = v as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const k in src) {
-    if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = deepClone(src[k]);
+  const out: Record<string, unknown> = Object.getPrototypeOf(src) === null
+    ? Object.create(null) as Record<string, unknown>
+    : {};
+  for (const k of Object.keys(src)) {
+    // Define data properties so an own "__proto__" key stays data when a
+    // legacy JSON object is cloned. Assignment to an ordinary object would
+    // invoke Object.prototype.__proto__ instead.
+    Object.defineProperty(out, k, {
+      value: deepClone(src[k]),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return out as T;
+}
+
+/** A JSON-shaped dictionary whose external string keys never consult the
+ * Object prototype. Object.keys/JSON.stringify preserve its wire shape. */
+export function keyedRecord<T>(src?: Readonly<Record<string, T>>): Record<string, T> {
+  const out = Object.create(null) as Record<string, T>;
+  if (src) {
+    for (const key of Object.keys(src)) out[key] = src[key]!;
+  }
+  return out;
 }

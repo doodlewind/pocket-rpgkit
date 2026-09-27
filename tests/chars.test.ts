@@ -321,6 +321,25 @@ describe("P1④-fix — a route step checks the cell in the step direction (R5)"
     expect([chars.chars["mover"]!.tx, chars.chars["mover"]!.ty]).toEqual([4, 2]);
   });
 
+  test("moveRight into a cell that seals its OWN left edge is refused (destination reverse edge)", () => {
+    const entrySheet: Sheet = {
+      id: "s", cols: 12, rows: 11, defaultPassage: "pass",
+      dirBlock: { "1": ["left"] },
+    };
+    const map: MapDef = {
+      id: "m", name: "m", width: 9, height: 9, sheets: ["s"],
+      ground: groundAt(9, 9, 3 * 9 + 4),
+      events: [ev("mover", 3, 3, { moveRoute: route(["moveRight", "moveUp"], false) })],
+    };
+    const table = buildPassage(map, new Map([["s", entrySheet]]));
+    let chars = syncPages(createChars(), map, createSwitchState(), CFG, new Set()).state;
+    for (let tick = 0; tick < STEP * 2; tick++) {
+      chars = stepChars(chars, table, { tx: 0, ty: 0, destX: 0, destY: 0 }, CFG, new Set(), { mover: "static" }).state;
+    }
+    expect([chars.chars.mover!.tx, chars.chars.mover!.ty]).toEqual([3, 3]);
+    expect(chars.chars.mover!.facing).toBe(3);
+  });
+
   test("moveUp out of an up-blocked source cell is refused even when pre-facing right", () => {
     const sheet: Sheet = { id: "s", cols: 12, rows: 11, defaultPassage: "pass", dirBlock: { "1": ["up"] } };
     const map: MapDef = {
@@ -393,5 +412,83 @@ describe("P1④-fix — a forced route restores the page patrol afterward (R3)",
       chars = stepChars(chars, table, { tx: 0, ty: 0, destX: 0, destY: 0 }, CFG, new Set(), motion).state;
     }
     expect([chars.chars["guard"]!.tx, chars.chars["guard"]!.ty]).toEqual([5, 4]);
+  });
+});
+
+describe("I1-fix2 — char motion folds fixed reference ticks", () => {
+  const PLAYER_FAR = { tx: 0, ty: 0, destX: 0, destY: 0 };
+
+  function tick(map: MapDef, chars: CharsState): CharsState {
+    const table = buildPassage(map, new Map([["s", SHEET]]));
+    const motion = Object.fromEntries(
+      (map.events ?? []).map((event) => [event.id, event.pages[0]!.moveType ?? "static"]),
+    );
+    return stepChars(chars, table, PLAYER_FAR, CFG, new Set(), motion as never).state;
+  }
+
+  test("sixty reference ticks reach the expected patrol phase", () => {
+    const map = makeMap([ev("patrol", 10, 4, { moveRoute: route([
+      ...Array(8).fill("moveRight"),
+      ...Array(8).fill("moveLeft"),
+      "wait", "faceUp", "faceDown",
+    ], true) })], 40, 12);
+    let chars = synced(map);
+    for (let i = 0; i < 60; i++) chars = tick(map, chars);
+    expect(chars.chars.patrol).toMatchObject({
+      tx: 17, px: 280, facing: 3, phase: 4, moving: true,
+      route: { pc: 8, waitLeft: 0 },
+    });
+  });
+
+  test("a fresh character advances on every reference tick of its creation frame", () => {
+    // The current session architecture syncs pages inside each fixed-rate
+    // tick. This supersedes task 1376's host-frame `started` set: a 4 Hz
+    // creation frame consumes the same fifteen ticks as fifteen 60 Hz frames.
+    const map = makeMap([ev("npc", 3, 3, { moveRoute: route(["moveRight", "moveRight"], true) })]);
+    let chars = synced(map);
+    for (let referenceTick = 0; referenceTick < 15; referenceTick++) chars = tick(map, chars);
+    expect(chars.chars.npc).toMatchObject({
+      tx: 4, px: 78, facing: 3, phase: 7, moving: true,
+      route: { pc: 0, waitLeft: 0 },
+    });
+  });
+
+  test("a newly synced character moves on its first fixed reference tick", () => {
+    const map = makeMap([ev("npc", 3, 3, { moveRoute: route(["moveRight"], true) })]);
+    const moved = tick(map, synced(map)).chars.npc!;
+    expect(moved.phase).toBe(1);
+    expect(moved.px).toBe(50);
+  });
+
+  test("autonomous random NPCs advance to a pinned seeded state", () => {
+    const map = makeMap([ev("boy", 6, 6, { moveType: "random" })]);
+    let chars = synced(map);
+    for (let tickIndex = 0; tickIndex < 60; tickIndex++) chars = tick(map, chars);
+    expect(chars.rng).toBe(1300342532);
+    expect(chars.chars.boy).toMatchObject({
+      tx: 7, ty: 8, px: 112, py: 128, facing: 0, phase: 0,
+      moving: false, thinkIn: 13, route: null,
+    });
+  });
+});
+
+describe("character reducer purity", () => {
+  test("advancing an active route never mutates retained input states", () => {
+    const map = makeMap([ev("npc", 3, 3, {
+      moveRoute: route(["moveRight", "wait", "moveLeft"], true),
+    })]);
+    const table = buildPassage(map, new Map([["s", SHEET]]));
+    const motion = { npc: "static" } as const;
+    const playerFar = { tx: 0, ty: 0, destX: 0, destY: 0 };
+    const retained: Array<{ state: CharsState; json: string }> = [];
+    let chars = synced(map);
+
+    for (let tickIndex = 0; tickIndex < 40; tickIndex++) {
+      retained.push({ state: chars, json: JSON.stringify(chars) });
+      chars = stepChars(chars, table, playerFar, CFG, new Set(), motion).state;
+      for (const previous of retained.slice(-4)) {
+        expect(JSON.stringify(previous.state)).toBe(previous.json);
+      }
+    }
   });
 });

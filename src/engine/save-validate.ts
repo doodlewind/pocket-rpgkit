@@ -14,6 +14,8 @@
 // safe-point invariant. Whether `map` is a map THIS build runs is decided
 // by the host when restoring (MapView compares against its runtime map).
 
+import { MAX_FIBER_STACK_DEPTH } from "./interpreter.ts";
+
 const INTEGER_OPS = new Set([
   "text", "choices", "switch", "variable", "selfSwitch", "if", "jmp",
   "wait", "gold", "item", "se", "erase", "exit", "transfer",
@@ -279,6 +281,9 @@ function validateFiber(
   if (typeof v.erase !== "boolean") return fail(`${path}.erase`, "boolean required");
   if (!Array.isArray(v.stack) || v.stack.length === 0) {
     return fail(`${path}.stack`, "non-empty stack array required");
+  }
+  if (v.stack.length > MAX_FIBER_STACK_DEPTH) {
+    return fail(`${path}.stack`, `at most ${MAX_FIBER_STACK_DEPTH} frames allowed`);
   }
   for (let i = 0; i < v.stack.length; i++) {
     const frame = v.stack[i];

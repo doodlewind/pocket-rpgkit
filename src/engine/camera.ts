@@ -15,6 +15,13 @@ export interface WorldSize {
   worldH: number;
 }
 
+/** Logical viewport in pixels. Omit it to retain the 480x272 console
+ *  contract; desktop GameView callers pass the live host dimensions. */
+export interface ViewportSize {
+  viewportW?: number;
+  viewportH?: number;
+}
+
 export interface CameraConfig extends WorldSize {
   /** Pixels per held frame at 60 Hz (slice P1① uses 2). */
   speed: number;
@@ -23,11 +30,13 @@ export interface CameraConfig extends WorldSize {
 export function clampCamera(
   x: number,
   y: number,
-  cfg: WorldSize,
+  cfg: WorldSize & ViewportSize,
 ): { x: number; y: number } {
+  const viewportW = cfg.viewportW ?? VIEW_W;
+  const viewportH = cfg.viewportH ?? VIEW_H;
   return {
-    x: Math.max(0, Math.min(cfg.worldW - VIEW_W, x)),
-    y: Math.max(0, Math.min(cfg.worldH - VIEW_H, y)),
+    x: Math.max(0, Math.min(cfg.worldW - viewportW, x)),
+    y: Math.max(0, Math.min(cfg.worldH - viewportH, y)),
   };
 }
 
@@ -44,9 +53,11 @@ export function followCamera(
   py: number,
   tile: number,
   facing: Facing,
-  cfg: WorldSize,
+  cfg: WorldSize & ViewportSize,
 ): CameraState {
-  const c = clampCamera(px + tile / 2 - VIEW_W / 2, py + tile / 2 - VIEW_H / 2, cfg);
+  const viewportW = cfg.viewportW ?? VIEW_W;
+  const viewportH = cfg.viewportH ?? VIEW_H;
+  const c = clampCamera(px + tile / 2 - viewportW / 2, py + tile / 2 - viewportH / 2, cfg);
   return { x: c.x, y: c.y, facing };
 }
 

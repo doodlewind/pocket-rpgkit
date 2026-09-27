@@ -15,7 +15,7 @@ import {
 } from "../src/engine/session.ts";
 import { createSwitchState } from "../src/engine/interpreter.ts";
 import { buildMiniProject } from "../example/mini-project.ts";
-import type { Command, GameEvent, MapDef, Project, TileId } from "../src/engine/types.ts";
+import type { Command, GameEvent, MapDef, MoveStep, Project, TileId } from "../src/engine/types.ts";
 
 const GRASS: TileId = "town.0";
 
@@ -227,6 +227,32 @@ describe("P1④ session — command move routes", () => {
     expect(out.move.facing).toBe(2); // faceUp turned the player around
     expect(out.sw.switches["turned"]).toBe(true);
     expect(out.playerRoute).toBeNull();
+  });
+
+  test("every same-tick waited NPC route is installed and resumes its publisher", () => {
+    const walker = (id: string, x: number): GameEvent => ge(id, x, 1, page("parallel", [
+      {
+        op: "moveRoute",
+        target: "this",
+        wait: true,
+        route: { steps: ["moveDown"], repeat: false, skippable: false },
+      },
+      { op: "switch", id: `done-${id}`, value: true },
+      { op: "erase" },
+    ]));
+    const p = project(
+      [map("a", 12, 8, [walker("a", 6), walker("b", 8)])],
+      { map: "a", x: 1, y: 6, dir: "right" },
+    );
+
+    for (const hz of [60, 4] as const) {
+      const sess = createSession(p, hz);
+      const out = run(sess, startSession(p, sess), hz);
+      expect(out.sw.switches["done-a"], `${hz} Hz route a`).toBe(true);
+      expect(out.sw.switches["done-b"], `${hz} Hz route b`).toBe(true);
+      expect(Object.keys(out.interp.erased).sort(), `${hz} Hz erased pages`)
+        .toEqual(["a/a", "a/b"]);
+    }
   });
 });
 
@@ -544,5 +570,258 @@ describe("I1-fix — a parallel choices box captures direction and freezes the m
     s = stepSession(sess, s, { buttons: BTN_DOWN, downEdge: true });
     expect(s.interp.modal).toMatchObject({ kind: "choices", index: 1 });
     expect({ px: s.move.px, py: s.move.py, tx: s.move.tx, ty: s.move.ty }).toEqual(before);
+  });
+});
+
+// --- I1-fix2: movement routes run on virtual time, not guest frames -------
+// One journey (a waited player route with an in-route wait, and a looping
+// NPC patrol that also waits) must produce the SAME player and NPC position
+// series at 60/30/20/4 Hz. The session folds a fixed 60-tick virtual-time
+// reference: every host frame, including the first, covers 60/hz ticks.
+// Sampling instants below land on every tested host grid.
+
+describe("I1-fix2 — movement routes are hz-portable (review 1284 B1)", () => {
+  function journey(hz: number) {
+    // Page 0 autoruns once; page 1 (empty) activates on the done switch so
+    // the MV autorun restart cannot re-run the route.
+    const driver = ge("driver", 0, 0, [
+      {
+        trigger: "autorun",
+        sprite: null,
+        commands: [
+          {
+            op: "moveRoute",
+            target: "player",
+            wait: true,
+            route: {
+              // four steps, one step-long wait, four steps: the in-route
+              // wait occupies one step's worth of reference ticks.
+              steps: [
+                ...Array(4).fill("moveRight"),
+                "wait",
+                ...Array(4).fill("moveRight"),
+              ] as MoveStep[],
+              repeat: false,
+              skippable: false,
+            },
+          },
+          { op: "switch", id: "route-done", value: true },
+        ],
+      },
+      {
+        trigger: "autorun",
+        sprite: null,
+        condition: { switch: "route-done" },
+        commands: [],
+      },
+    ]);
+    const npc = ge("npc", 2, 5, page("action", [], {
+      moveRoute: {
+        steps: [
+          ...Array(4).fill("moveRight"),
+          "wait",
+          ...Array(4).fill("moveLeft"),
+          "wait",
+        ] as MoveStep[],
+        repeat: true,
+        skippable: false,
+      },
+    }));
+    const p = project([map("a", 24, 8, [driver, npc])], { map: "a", x: 2, y: 2, dir: "down" });
+    const sess = createSession(p, hz);
+    return { sess, s: startSession(p, sess) };
+  }
+
+  function runTo(hz: number, targetTick: number) {
+    const n = 60 / hz;
+    let { sess, s } = journey(hz);
+    const frames = targetTick / n;
+    if (!Number.isInteger(frames)) throw new Error(`target ${targetTick} off-grid at ${hz} Hz`);
+    // Routes self-drive; no buttons are held, so every reference tick sees
+    // the same input and the comparison isolates motion timing.
+    for (let f = 0; f < frames; f++) s = stepSession(sess, s, { buttons: 0 });
+    return s;
+  }
+
+  function sample(s: SessionState) {
+    const ch = s.chars.chars["npc"]!;
+    return {
+      player: {
+        tx: s.move.tx, ty: s.move.ty, px: s.move.px, py: s.move.py,
+        phase: s.move.phase, moving: s.move.moving, facing: s.move.facing,
+        routePc: s.playerRoute?.pc ?? null,
+        routePhase: s.playerRoute?.phase ?? null,
+      },
+      npc: {
+        tx: ch.tx, ty: ch.ty, px: ch.px, py: ch.py, phase: ch.phase,
+        moving: ch.moving, routePc: ch.route?.pc ?? null,
+        waitLeft: ch.route?.waitLeft ?? null,
+      },
+      done: s.sw.switches["route-done"] ?? false,
+    };
+  }
+
+  for (const targetTick of [30, 60, 90, 120] as const) {
+    test(`player and NPC positions agree at tick ${targetTick} across 60/30/20/4 Hz`, () => {
+      const at60 = sample(runTo(60, targetTick));
+      for (const hz of [30, 20, 4] as const) {
+        expect(sample(runTo(hz, targetTick))).toEqual(at60);
+      }
+    });
+  }
+
+  test("the player walks eight tiles with one wait and then sets the done switch", () => {
+    // Sanity on the agreed 60 Hz trajectory: 8 right steps from tile 2 land
+    // on 10 (8 steps * 8 ticks + an 8-tick wait = 72 moving ticks).
+    const at120 = sample(runTo(60, 120));
+    expect(at120.player.tx).toBe(10);
+    expect(at120.player.moving).toBe(false);
+    expect(at120.done).toBe(true);
+    // The looping patrol kept moving off its authored post.
+    expect(at120.npc.tx).not.toBe(2);
+  });
+
+  function afterOneSecond(hz: number, events: GameEvent[]): SessionState {
+    const p = project([map("a", 64, 8, events)], { map: "a", x: 2, y: 2, dir: "right" });
+    const sess = createSession(p, hz);
+    return run(sess, startSession(p, sess), hz);
+  }
+
+  test("a ten-step forced player route has a pinned one-second state at every rate", () => {
+    const driver = ge("driver", 0, 0, page("autorun", [
+      {
+        op: "moveRoute",
+        target: "player",
+        wait: true,
+        route: {
+          steps: new Array<MoveStep>(10).fill("moveRight"),
+          repeat: false,
+          skippable: false,
+        },
+      },
+      { op: "switch", id: "route-done", value: true },
+    ]));
+    for (const hz of [60, 30, 20, 4] as const) {
+      const state = afterOneSecond(hz, [driver]);
+      expect({
+        tx: state.move.tx, px: state.move.px, moving: state.move.moving,
+        phase: state.playerRoute?.phase ?? null, pc: state.playerRoute?.pc ?? null,
+        done: state.sw.switches["route-done"] ?? false,
+      }).toEqual({ tx: 10, px: 166, moving: true, phase: 3, pc: 9, done: false });
+    }
+  });
+
+  test("a twenty-step NPC patrol has a pinned one-second state at every rate", () => {
+    const npc = ge("npc", 10, 4, page("action", [], {
+      moveRoute: {
+        steps: [
+          ...new Array<MoveStep>(10).fill("moveRight"),
+          ...new Array<MoveStep>(10).fill("moveLeft"),
+        ],
+        repeat: true,
+        skippable: false,
+      },
+    }));
+    for (const hz of [60, 30, 20, 4] as const) {
+      const ch = afterOneSecond(hz, [npc]).chars.chars.npc!;
+      expect({
+        tx: ch.tx, px: ch.px, moving: ch.moving, phase: ch.phase,
+        pc: ch.route?.pc ?? null, waitLeft: ch.route?.waitLeft ?? null,
+      }).toEqual({ tx: 17, px: 280, moving: true, phase: 4, pc: 8, waitLeft: 0 });
+    }
+  });
+
+  test("in-route waits retain five reference ticks after one second at every rate", () => {
+    const npc = ge("npc", 10, 4, page("action", [], {
+      moveRoute: {
+        steps: ["moveRight", "moveRight", "wait", "wait", "moveLeft", "moveLeft", "wait", "wait"],
+        repeat: true,
+        skippable: false,
+      },
+    }));
+    for (const hz of [60, 30, 20, 4] as const) {
+      const ch = afterOneSecond(hz, [npc]).chars.chars.npc!;
+      expect({
+        tx: ch.tx, px: ch.px, moving: ch.moving, phase: ch.phase,
+        pc: ch.route?.pc ?? null, waitLeft: ch.route?.waitLeft ?? null,
+      }).toEqual({ tx: 10, px: 160, moving: false, phase: 0, pc: 0, waitLeft: 5 });
+    }
+  });
+
+  test("sequential waited routes consume the remaining ticks in their host frame", () => {
+    const driver = ge("driver", 0, 0, page("autorun", Array.from(
+      { length: 12 },
+      () => ({
+        op: "moveRoute" as const,
+        target: "player" as const,
+        wait: true,
+        route: { steps: ["moveRight" as const], repeat: false, skippable: false },
+      }),
+    )));
+    const p = project([map("a", 24, 8, [driver])], { map: "a", x: 2, y: 2, dir: "right" });
+    const samples = [60, 30, 20, 4].map((hz) => {
+      const sess = createSession(p, hz);
+      const state = run(sess, startSession(p, sess), hz);
+      return {
+        tx: state.move.tx, px: state.move.px, moving: state.move.moving,
+        phase: state.playerRoute?.phase ?? null, pc: state.playerRoute?.pc ?? null,
+      };
+    });
+    expect(samples.slice(1)).toEqual([samples[0], samples[0], samples[0]]);
+  });
+
+  test("contested player and NPC routes interleave in reference-tick order", () => {
+    const driver = ge("driver", 0, 0, page("autorun", [{
+      op: "moveRoute",
+      target: "player",
+      wait: true,
+      route: { steps: new Array<MoveStep>(30).fill("moveRight"), repeat: false, skippable: false },
+    }]));
+    const npc = ge("npc", 2, 2, page("action", [], {
+      blocks: true,
+      moveRoute: {
+        steps: new Array<MoveStep>(30).fill("moveRight"),
+        repeat: true,
+        skippable: false,
+      },
+    }));
+    const p = project([map("a", 96, 8, [driver, npc])], { map: "a", x: 1, y: 2, dir: "right" });
+    const samples = [60, 30, 20, 4].map((hz) => {
+      const sess = createSession(p, hz);
+      const state = run(sess, startSession(p, sess), hz);
+      const ch = state.chars.chars.npc!;
+      return {
+        player: { tx: state.move.tx, px: state.move.px, phase: state.playerRoute?.phase },
+        npc: { tx: ch.tx, px: ch.px, phase: ch.phase },
+      };
+    });
+    expect(samples.slice(1)).toEqual([samples[0], samples[0], samples[0]]);
+  });
+});
+
+describe("session reducer purity", () => {
+  test("advancing a player route never mutates retained input states", () => {
+    const driver = ge("driver", 0, 0, page("autorun", [{
+      op: "moveRoute",
+      target: "player",
+      wait: true,
+      route: {
+        steps: ["moveRight", "wait", "moveRight"],
+        repeat: true,
+        skippable: false,
+      },
+    }]));
+    const p = project([map("a", 24, 8, [driver])], { map: "a", x: 2, y: 2, dir: "right" });
+    const sess = createSession(p, 60);
+    const retained: Array<{ state: SessionState; json: string }> = [];
+    let state = startSession(p, sess);
+
+    for (let frame = 0; frame < 40; frame++) {
+      retained.push({ state, json: JSON.stringify(state) });
+      state = stepSession(sess, state, { buttons: 0 });
+      for (const previous of retained.slice(-4)) {
+        expect(JSON.stringify(previous.state)).toBe(previous.json);
+      }
+    }
   });
 });
