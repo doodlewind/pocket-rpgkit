@@ -10,3 +10,7 @@ dist/
 
 # desktop build plans (tools/desktop.ts)
 .pocket/
+
+# Procedural test-fixture art, written by the fixture's gen-assets.ts on
+# every `bun run build:example`.
+tests/fixtures/*/assets/

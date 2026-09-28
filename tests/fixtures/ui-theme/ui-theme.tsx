@@ -1,0 +1,60 @@
+// tests/fixtures/ui-theme/ui-theme.tsx — sim fixture for the themeable
+// DialogBox and SaveMenu (tests/ui-theme-sim.test.ts). A black screen with
+// one DialogBox and one SaveMenu; the test picks a named scene (scenes.ts)
+// through globalThis.__uiFixture.show() and renders the next frame.
+
+import { batch, createSignal } from "solid-js";
+import { mount } from "@pocketjs/framework";
+import { View } from "@pocketjs/framework/components";
+import { createOsk } from "@pocketjs/framework/osk";
+import type { Modal } from "../../../src/engine/interpreter.ts";
+import type { MenuState } from "../../../src/engine/save-menu.ts";
+import { DialogBox, SaveMenu, type UiTheme } from "../../../src/ui/index.ts";
+import { CODE, FACES, MENUS, MODALS, SAVE_TITLE, SLOTS, THEMES, type FixtureScene } from "./scenes.ts";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __uiFixture: { show(scene: FixtureScene): void } | undefined;
+}
+
+function Fixture() {
+  const [modal, setModal] = createSignal<Modal | null>(null);
+  const [menu, setMenu] = createSignal<MenuState>(MENUS.closed);
+  const [theme, setTheme] = createSignal<Partial<UiTheme> | undefined>(undefined);
+  const [faces, setFaces] = createSignal<Record<string, string> | undefined>(undefined);
+  const [title, setTitle] = createSignal<string | undefined>(undefined);
+  const [code, setCode] = createSignal("");
+  const legend = () => (modal()?.kind === "choices" ? "ok  back" : "next");
+  const osk = createOsk({ value: code, setValue: setCode, onCommit: () => {} });
+
+  globalThis.__uiFixture = {
+    show(scene) {
+      batch(() => {
+        setModal(MODALS[scene.modal ?? "none"]);
+        setMenu(MENUS[scene.menu ?? "closed"]);
+        setTheme(THEMES[scene.theme ?? "default"]);
+        setFaces(scene.faces ? FACES : undefined);
+        setTitle(scene.title ? SAVE_TITLE : undefined);
+        setCode(CODE);
+      });
+    },
+  };
+
+  return (
+    <View class="w-full h-full overflow-hidden bg-black">
+      <DialogBox modal={modal} legend={legend} theme={theme()} faces={faces()} />
+      <SaveMenu
+        menu={menu}
+        hasFs={true}
+        slots={() => SLOTS}
+        saveCode={code}
+        osk={osk}
+        legend={legend}
+        theme={theme()}
+        title={title()}
+      />
+    </View>
+  );
+}
+
+mount(() => <Fixture />);

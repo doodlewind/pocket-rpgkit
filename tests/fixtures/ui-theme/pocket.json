@@ -1,0 +1,30 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.lfkdsk.pocket-rpgkit-ui-theme-fixture",
+  "name": "pocket-rpgkit-ui-theme-fixture",
+  "title": "Pocket RPG Kit — UI theme test fixture",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": [
+        "text.glyphs.baked",
+        "input.buttons"
+      ]
+    }
+  },
+  "app": {
+    "entry": "tests/fixtures/ui-theme/ui-theme.tsx",
+    "output": "ui-theme",
+    "framework": "solid",
+    "viewport": {
+      "fixed": {
+        "logical": [
+          480,
+          272
+        ],
+        "presentation": "integer-fit"
+      }
+    }
+  }
+}
