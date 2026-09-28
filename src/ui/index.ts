@@ -2,7 +2,16 @@
 // presentation driven by engine reducer state; the host app owns signals and
 // side effects.
 
-export { DialogBox } from "./DialogBox.tsx";
+export { DialogBox, type DialogBoxProps } from "./DialogBox.tsx";
+export { Panel, type PanelProps } from "./Panel.tsx";
+export {
+  DEFAULT_UI_THEME,
+  resolveUiTheme,
+  speakerLabel,
+  splitSpeaker,
+  type SpeakerSplit,
+  type UiTheme,
+} from "./theme.ts";
 export { PlayerSprite, playerImageKey, type PlayerFrames, type PlayerSpriteProps } from "./PlayerSprite.tsx";
 export { SaveMenu, type SlotInfo, type SaveMenuProps } from "./SaveMenu.tsx";
 export { ChunkLayer, type ChunkLayerProps } from "./ChunkLayer.tsx";

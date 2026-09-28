@@ -17,7 +17,8 @@
 //                               map's container is display:none
 //       player Sprite           the Sharm walker
 //       upper chunks            star layer of the current map
-//     DialogBox               text / choices
+//     DialogBox               text / choices (themed, with portraits when
+//                             the entry passes theme / faces)
 //     fade overlay            black, opacity ramps for a faded transfer
 //
 // Desktop windows publish their live logical size (hostViewport /
@@ -51,6 +52,7 @@ import type { CameraState, Facing, GameEvent, MapDef, Project, SpriteDef } from 
 import { PlayerSprite } from "./PlayerSprite.tsx";
 import { walkPose, type WalkPose } from "../engine/movement.ts";
 import { DialogBox } from "./DialogBox.tsx";
+import type { UiTheme } from "./theme.ts";
 import type { Modal } from "../engine/interpreter.ts";
 import type { GameAssets } from "./game-assets.ts";
 import { ChunkLayer } from "./ChunkLayer.tsx";
@@ -103,6 +105,12 @@ export function GameView(props: {
   /** One u16 button mask per 60 Hz source frame (engine/attract-tape.ts).
    *  Present: attract/takeover/rewind drive the fold. Absent: live play. */
   attractTape?: readonly number[];
+  /** DialogBox colours (ui/theme.ts); missing keys keep the kit default. */
+  theme?: Partial<UiTheme>;
+  /** DialogBox speaker portraits: NAME -> 64x64 image src. */
+  faces?: Readonly<Record<string, string>>;
+  /** DialogBox portrait column width (default 72). */
+  faceWidth?: number;
 }) {
   const { project, assets } = props;
   // The host rate selects how many fixed 60 Hz reference ticks each frame
@@ -416,7 +424,13 @@ export function GameView(props: {
         </View>
       </View>
 
-      <DialogBox modal={modal} legend={actions.legend} />
+      <DialogBox
+        modal={modal}
+        legend={actions.legend}
+        theme={props.theme}
+        faces={props.faces}
+        faceWidth={props.faceWidth}
+      />
 
       {/* D1/D2 demo overlay. In attract a small DEMO plate with the tape
           frame number sits in the top-right corner, away from the action.
