@@ -12,7 +12,8 @@ the parts an RPG-Maker-style game needs without any specific game:
 - **Solid UI components** (`src/ui/`) — `GameView`, a complete game screen
   for a project (chunked maps, follow camera, NPCs, dialog, fades, and
   optional attract mode), plus the blocks it is made of: `DialogBox`,
-  `PlayerSprite`, `ChunkLayer`, `SaveMenu`;
+  `PlayerSprite`, `ChunkLayer`, `SaveMenu`, `Panel`. The framed ones take a
+  colour theme, and `DialogBox` shows speaker portraits;
 - **attract mode** (`src/engine/attract.ts`) — after 10 idle seconds a
   recorded playthrough replays from a clean world; any button takes over
   on that very frame, **L** rewinds 3 virtual seconds, **SELECT** hands
@@ -62,8 +63,8 @@ cd pocket-rpgkit
 bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
-bun run build:example    # build meadow, sunstone, grow into dist/
-bun test                 # 428 tests incl. sim journeys and pixel goldens
+bun run build:example    # build meadow, sunstone, grow + test fixtures into dist/
+bun test                 # 446 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, meadow; needs a Rust toolchain)
@@ -160,6 +161,48 @@ tile boundary, no modal, no parked request). Hosts with `data.fs` write
 three slots through `src/host/save-fs.ts`; other hosts exchange the same
 envelope as URL-safe base64 text (the save code).
 
+### Themes and speaker portraits
+
+`DialogBox`, `SaveMenu` and `GameView` take an optional `theme`, a
+`Partial<UiTheme>`; keys left out keep the kit's navy look. `DialogBox` and
+`GameView` also take `faces`, a table from speaker name to portrait:
+
+```tsx
+import { GameView, type UiTheme } from "pocket-rpgkit/ui";
+
+const PARCHMENT: Partial<UiTheme> = {
+  border: "#7a4a2a", // outer 2 px frame; fill of the name tab
+  rim: "#e8a050",    // optional 1 px ring inside the border
+  paper: "#f4ecd8",  // panel fill; text of the name tab
+  ink: "#302820",    // body text
+  dim: "#8a6040",    // prompts, legends, hints
+  accent: "#c03020", // titles, the selected row
+};
+const FACES = {
+  KEEPER: "assets/face/keeper.png", // 64x64 PNGs
+  CLERK: "assets/face/clerk.png",
+};
+
+mount(() => <GameView project={project} assets={GAME_ASSETS} theme={PARCHMENT} faces={FACES} />);
+```
+
+A text whose first line starts with `NAME: ` (`/^([A-Z][A-Z]+): /`) for a
+name in `faces` shows that portrait left of the text and a `Name` tab on
+the box's top edge. The prefix is never typed: the interpreter still
+counts it, so the reveal is offset by its length and the words start after
+a short beat with the portrait already up. Any other line, including
+`MAYOR: ...` when `MAYOR` has no face, renders exactly as it would without
+`faces`. Pak images are power-of-two and at most 512 px, so portraits are
+64×64; a game that draws a smaller face inside that canvas narrows the
+column with `faceWidth` (default 72: the image plus an 8 px gap). As with
+every image, the paths must appear as full string literals in the game's
+sources so the build bakes them.
+
+`SaveMenu` also takes a `title` for its root page. `Panel` is the frame
+both components draw (border, optional rim, paper), for a game's own
+screens such as a help page. `resolveUiTheme` and `splitSpeaker` are plain
+TypeScript and are exported from `pocket-rpgkit` as well.
+
 ## Target matrix
 
 The engine is host-free TypeScript; the targets below describe what the
@@ -181,14 +224,16 @@ src/engine/      pure runtime (types, motion-clock, movement, passability,
                  interpreter, chars, session, camera, viewport, tiles,
                  save*, schema-validate, attract, tape, journey-search)
 src/data/        schema.json (normative) + CHANGELOG
-src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu
+src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu,
+                 Panel, theme (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
 tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts)
 tools/           example build driver
 examples/        meadow (minimal), sunstone (game + attract), grow (demo);
                  each has its entry, data, assets/src, gen-assets.ts,
                  images.json, pocket.json and ATTRIBUTION.md
-tests/           unit suites, sim suites, goldens/
+tests/           unit suites, sim suites, goldens/, fixtures/ (small
+                 apps the sim suites boot, built by build:example)
 vendor/pocketjs  pinned PocketJS submodule
 ```
 
