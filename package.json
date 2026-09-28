@@ -23,7 +23,8 @@
     "build:example": "bun tools/build-example.ts",
     "build:wasm": "bun vendor/pocketjs/tools/wasm.ts",
     "check": "bun test && bunx tsc --noEmit",
-    "desktop": "bun tools/desktop.ts"
+    "desktop": "bun tools/desktop.ts",
+    "package:macos": "bun tools/package-macos.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

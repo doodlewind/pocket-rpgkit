@@ -70,6 +70,16 @@ bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, meadow; needs a Rust toolchain)
 ```
 
+On a Mac, `bun run package:macos sunstone` (or `grow`, `meadow`) makes a
+double-clickable `dist/macos/<Name>.app` plus a zip to hand around: the
+desktop host, the example's bundle and pak, an icon cropped from its
+golden frame, and the licenses. It is built for the Mac's own
+architecture and ad-hoc signed, not notarized, so a downloaded copy opens
+the first time with right-click > Open (or Privacy & Security > Open
+Anyway). A game that vendors this kit packages itself with
+`bun vendor/pocket-rpgkit/tools/package-macos.ts --project-root .`
+(`--name`, `--icon <png>`, `--icon-crop x,y,w,h` to taste).
+
 `bun run build:example sunstone` builds one example. `bun run gen-assets`
 regenerates every example's baked art from its `assets/src/`; the cookers
 are deterministic and reproduce the committed PNGs byte for byte.
@@ -228,7 +238,7 @@ src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu,
                  Panel, theme (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
 tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts)
-tools/           example build driver
+tools/           example build, desktop launcher, macOS packager
 examples/        meadow (minimal), sunstone (game + attract), grow (demo);
                  each has its entry, data, assets/src, gen-assets.ts,
                  images.json, pocket.json and ATTRIBUTION.md
