@@ -57,7 +57,7 @@ The runtime pins PocketJS with a git submodule at
 ## Quick start
 
 ```sh
-git clone --recurse-submodules <repo-url> pocket-rpgkit
+git clone --recurse-submodules https://github.com/lfkdsk/pocket-rpgkit.git
 cd pocket-rpgkit
 bun install
 bun test                 # reducer/format/controller suites; sim cases skip
