@@ -10,6 +10,8 @@
 // the pak pass bakes them):
 //   meadow-ground.png / meadow-upper.png  512x512 PSM_4444 canvases
 //   player-dir0..3.png, player-pose{0..3}-{l,r}.png  12 walker frames
+// and data/meadow.json, the project as an rpgkit-project/v1 document (the
+// file the editor opens: `bun run editor meadow`).
 //
 // The generic pipeline lives in tools/lib/bake.ts; this file only states
 // the example's project and file names.
@@ -23,8 +25,10 @@ const EXAMPLE = new URL(".", import.meta.url).pathname; // examples/meadow/
 const SRC = join(EXAMPLE, "assets", "src");
 const OUT = join(EXAMPLE, "assets");
 mkdirSync(OUT, { recursive: true });
+mkdirSync(join(EXAMPLE, "data"), { recursive: true });
 
 const project = buildMiniProject();
+writeFileSync(join(EXAMPLE, "data", "meadow.json"), JSON.stringify(project, null, 2) + "\n");
 const map = project.maps[0]!;
 const cells = new Map([[SHEET.id, await loadTileCells(join(SRC, "town-tiles.png"), SHEET.cols, SHEET.rows)]]);
 
