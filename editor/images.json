@@ -1,0 +1,794 @@
+{
+  "assets/tile-town-0.png": {
+    "psm": 3
+  },
+  "assets/tile-town-1.png": {
+    "psm": 3
+  },
+  "assets/tile-town-2.png": {
+    "psm": 3
+  },
+  "assets/tile-town-3.png": {
+    "psm": 3
+  },
+  "assets/tile-town-4.png": {
+    "psm": 3
+  },
+  "assets/tile-town-5.png": {
+    "psm": 3
+  },
+  "assets/tile-town-6.png": {
+    "psm": 3
+  },
+  "assets/tile-town-7.png": {
+    "psm": 3
+  },
+  "assets/tile-town-8.png": {
+    "psm": 3
+  },
+  "assets/tile-town-9.png": {
+    "psm": 3
+  },
+  "assets/tile-town-10.png": {
+    "psm": 3
+  },
+  "assets/tile-town-11.png": {
+    "psm": 3
+  },
+  "assets/tile-town-12.png": {
+    "psm": 3
+  },
+  "assets/tile-town-13.png": {
+    "psm": 3
+  },
+  "assets/tile-town-14.png": {
+    "psm": 3
+  },
+  "assets/tile-town-15.png": {
+    "psm": 3
+  },
+  "assets/tile-town-16.png": {
+    "psm": 3
+  },
+  "assets/tile-town-17.png": {
+    "psm": 3
+  },
+  "assets/tile-town-18.png": {
+    "psm": 3
+  },
+  "assets/tile-town-19.png": {
+    "psm": 3
+  },
+  "assets/tile-town-20.png": {
+    "psm": 3
+  },
+  "assets/tile-town-21.png": {
+    "psm": 3
+  },
+  "assets/tile-town-22.png": {
+    "psm": 3
+  },
+  "assets/tile-town-23.png": {
+    "psm": 3
+  },
+  "assets/tile-town-24.png": {
+    "psm": 3
+  },
+  "assets/tile-town-25.png": {
+    "psm": 3
+  },
+  "assets/tile-town-26.png": {
+    "psm": 3
+  },
+  "assets/tile-town-27.png": {
+    "psm": 3
+  },
+  "assets/tile-town-28.png": {
+    "psm": 3
+  },
+  "assets/tile-town-29.png": {
+    "psm": 3
+  },
+  "assets/tile-town-30.png": {
+    "psm": 3
+  },
+  "assets/tile-town-31.png": {
+    "psm": 3
+  },
+  "assets/tile-town-32.png": {
+    "psm": 3
+  },
+  "assets/tile-town-33.png": {
+    "psm": 3
+  },
+  "assets/tile-town-34.png": {
+    "psm": 3
+  },
+  "assets/tile-town-35.png": {
+    "psm": 3
+  },
+  "assets/tile-town-36.png": {
+    "psm": 3
+  },
+  "assets/tile-town-37.png": {
+    "psm": 3
+  },
+  "assets/tile-town-38.png": {
+    "psm": 3
+  },
+  "assets/tile-town-39.png": {
+    "psm": 3
+  },
+  "assets/tile-town-40.png": {
+    "psm": 3
+  },
+  "assets/tile-town-41.png": {
+    "psm": 3
+  },
+  "assets/tile-town-42.png": {
+    "psm": 3
+  },
+  "assets/tile-town-43.png": {
+    "psm": 3
+  },
+  "assets/tile-town-44.png": {
+    "psm": 3
+  },
+  "assets/tile-town-45.png": {
+    "psm": 3
+  },
+  "assets/tile-town-46.png": {
+    "psm": 3
+  },
+  "assets/tile-town-47.png": {
+    "psm": 3
+  },
+  "assets/tile-town-48.png": {
+    "psm": 3
+  },
+  "assets/tile-town-49.png": {
+    "psm": 3
+  },
+  "assets/tile-town-50.png": {
+    "psm": 3
+  },
+  "assets/tile-town-51.png": {
+    "psm": 3
+  },
+  "assets/tile-town-52.png": {
+    "psm": 3
+  },
+  "assets/tile-town-53.png": {
+    "psm": 3
+  },
+  "assets/tile-town-54.png": {
+    "psm": 3
+  },
+  "assets/tile-town-55.png": {
+    "psm": 3
+  },
+  "assets/tile-town-56.png": {
+    "psm": 3
+  },
+  "assets/tile-town-57.png": {
+    "psm": 3
+  },
+  "assets/tile-town-58.png": {
+    "psm": 3
+  },
+  "assets/tile-town-59.png": {
+    "psm": 3
+  },
+  "assets/tile-town-60.png": {
+    "psm": 3
+  },
+  "assets/tile-town-61.png": {
+    "psm": 3
+  },
+  "assets/tile-town-62.png": {
+    "psm": 3
+  },
+  "assets/tile-town-63.png": {
+    "psm": 3
+  },
+  "assets/tile-town-64.png": {
+    "psm": 3
+  },
+  "assets/tile-town-65.png": {
+    "psm": 3
+  },
+  "assets/tile-town-66.png": {
+    "psm": 3
+  },
+  "assets/tile-town-67.png": {
+    "psm": 3
+  },
+  "assets/tile-town-68.png": {
+    "psm": 3
+  },
+  "assets/tile-town-69.png": {
+    "psm": 3
+  },
+  "assets/tile-town-70.png": {
+    "psm": 3
+  },
+  "assets/tile-town-71.png": {
+    "psm": 3
+  },
+  "assets/tile-town-72.png": {
+    "psm": 3
+  },
+  "assets/tile-town-73.png": {
+    "psm": 3
+  },
+  "assets/tile-town-74.png": {
+    "psm": 3
+  },
+  "assets/tile-town-75.png": {
+    "psm": 3
+  },
+  "assets/tile-town-76.png": {
+    "psm": 3
+  },
+  "assets/tile-town-77.png": {
+    "psm": 3
+  },
+  "assets/tile-town-78.png": {
+    "psm": 3
+  },
+  "assets/tile-town-79.png": {
+    "psm": 3
+  },
+  "assets/tile-town-80.png": {
+    "psm": 3
+  },
+  "assets/tile-town-81.png": {
+    "psm": 3
+  },
+  "assets/tile-town-82.png": {
+    "psm": 3
+  },
+  "assets/tile-town-83.png": {
+    "psm": 3
+  },
+  "assets/tile-town-84.png": {
+    "psm": 3
+  },
+  "assets/tile-town-85.png": {
+    "psm": 3
+  },
+  "assets/tile-town-86.png": {
+    "psm": 3
+  },
+  "assets/tile-town-87.png": {
+    "psm": 3
+  },
+  "assets/tile-town-88.png": {
+    "psm": 3
+  },
+  "assets/tile-town-89.png": {
+    "psm": 3
+  },
+  "assets/tile-town-90.png": {
+    "psm": 3
+  },
+  "assets/tile-town-91.png": {
+    "psm": 3
+  },
+  "assets/tile-town-92.png": {
+    "psm": 3
+  },
+  "assets/tile-town-93.png": {
+    "psm": 3
+  },
+  "assets/tile-town-94.png": {
+    "psm": 3
+  },
+  "assets/tile-town-95.png": {
+    "psm": 3
+  },
+  "assets/tile-town-96.png": {
+    "psm": 3
+  },
+  "assets/tile-town-97.png": {
+    "psm": 3
+  },
+  "assets/tile-town-98.png": {
+    "psm": 3
+  },
+  "assets/tile-town-99.png": {
+    "psm": 3
+  },
+  "assets/tile-town-100.png": {
+    "psm": 3
+  },
+  "assets/tile-town-101.png": {
+    "psm": 3
+  },
+  "assets/tile-town-102.png": {
+    "psm": 3
+  },
+  "assets/tile-town-103.png": {
+    "psm": 3
+  },
+  "assets/tile-town-104.png": {
+    "psm": 3
+  },
+  "assets/tile-town-105.png": {
+    "psm": 3
+  },
+  "assets/tile-town-106.png": {
+    "psm": 3
+  },
+  "assets/tile-town-107.png": {
+    "psm": 3
+  },
+  "assets/tile-town-108.png": {
+    "psm": 3
+  },
+  "assets/tile-town-109.png": {
+    "psm": 3
+  },
+  "assets/tile-town-110.png": {
+    "psm": 3
+  },
+  "assets/tile-town-111.png": {
+    "psm": 3
+  },
+  "assets/tile-town-112.png": {
+    "psm": 3
+  },
+  "assets/tile-town-113.png": {
+    "psm": 3
+  },
+  "assets/tile-town-114.png": {
+    "psm": 3
+  },
+  "assets/tile-town-115.png": {
+    "psm": 3
+  },
+  "assets/tile-town-116.png": {
+    "psm": 3
+  },
+  "assets/tile-town-117.png": {
+    "psm": 3
+  },
+  "assets/tile-town-118.png": {
+    "psm": 3
+  },
+  "assets/tile-town-119.png": {
+    "psm": 3
+  },
+  "assets/tile-town-120.png": {
+    "psm": 3
+  },
+  "assets/tile-town-121.png": {
+    "psm": 3
+  },
+  "assets/tile-town-122.png": {
+    "psm": 3
+  },
+  "assets/tile-town-123.png": {
+    "psm": 3
+  },
+  "assets/tile-town-124.png": {
+    "psm": 3
+  },
+  "assets/tile-town-125.png": {
+    "psm": 3
+  },
+  "assets/tile-town-126.png": {
+    "psm": 3
+  },
+  "assets/tile-town-127.png": {
+    "psm": 3
+  },
+  "assets/tile-town-128.png": {
+    "psm": 3
+  },
+  "assets/tile-town-129.png": {
+    "psm": 3
+  },
+  "assets/tile-town-130.png": {
+    "psm": 3
+  },
+  "assets/tile-town-131.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-0.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-1.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-2.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-3.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-4.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-5.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-6.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-7.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-8.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-9.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-10.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-11.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-12.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-13.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-14.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-15.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-16.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-17.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-18.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-19.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-20.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-21.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-22.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-23.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-24.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-25.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-26.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-27.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-28.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-29.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-30.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-31.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-32.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-33.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-34.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-35.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-36.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-37.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-38.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-39.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-40.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-41.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-42.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-43.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-44.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-45.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-46.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-47.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-48.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-49.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-50.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-51.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-52.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-53.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-54.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-55.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-56.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-57.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-58.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-59.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-60.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-61.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-62.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-63.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-64.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-65.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-66.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-67.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-68.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-69.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-70.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-71.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-72.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-73.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-74.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-75.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-76.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-77.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-78.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-79.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-80.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-81.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-82.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-83.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-84.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-85.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-86.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-87.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-88.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-89.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-90.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-91.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-92.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-93.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-94.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-95.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-96.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-97.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-98.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-99.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-100.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-101.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-102.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-103.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-104.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-105.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-106.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-107.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-108.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-109.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-110.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-111.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-112.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-113.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-114.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-115.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-116.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-117.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-118.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-119.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-120.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-121.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-122.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-123.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-124.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-125.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-126.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-127.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-128.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-129.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-130.png": {
+    "psm": 3
+  },
+  "assets/tile-dun-131.png": {
+    "psm": 3
+  }
+}
