@@ -3,11 +3,15 @@ import { AttractController } from "../src/engine/attract.ts";
 import {
   MapNotReadyError,
   MAP_SCHEMA_HASH,
+  canonicalMapJson,
   createJsonMapRepository,
+  decodeMapEntryBytes,
   mapChecksum,
   sha256Text,
+  validateMapDefStructure,
 } from "../src/engine/map-repository.ts";
 import {
+  acquireSessionMap,
   createSession,
   prepareSessionMap,
   startSession,
@@ -20,11 +24,13 @@ import {
   createSnapshot,
   encodeEnvelope,
   fnv1aText,
+  utf8Encode,
 } from "../src/engine/save.ts";
 import { restoreSessionEnvelope } from "../src/engine/save-restore.ts";
 import { validateSchema } from "../src/engine/schema-validate.ts";
 import { splitProjectMaps } from "../tools/lib/map-project.ts";
 import type { MapDef, Project } from "../src/engine/types.ts";
+import type { MapRepository } from "../src/engine/types.ts";
 import schema from "../src/data/schema.json";
 
 const MAP_COUNT = 24;
@@ -109,6 +115,58 @@ describe("sharded map repository", () => {
     expect(MAP_SCHEMA_HASH).toBe(sha256Text(canonicalJson(schema)));
   });
 
+  test("checksum verification defaults by source type and can be overridden", async () => {
+    const split = splitProjectMaps(fixture());
+    const start = split.entries[0]!;
+    const changedBytes = `${start.text} `;
+
+    const local = createJsonMapRepository(split.shell.mapIndex, {
+      read: () => changedBytes,
+    });
+    expect(local.acquire(start.meta.id).id).toBe(start.meta.id);
+
+    const verifiedLocal = createJsonMapRepository(split.shell.mapIndex, {
+      read: () => changedBytes,
+    }, { verify: true });
+    expect(() => verifiedLocal.acquire(start.meta.id)).toThrow(/checksum mismatch/);
+
+    const prepared = createJsonMapRepository(split.shell.mapIndex, {
+      read: () => changedBytes,
+      prepare: async () => {},
+    });
+    expect(() => prepared.acquire(start.meta.id)).toThrow(/checksum mismatch/);
+
+    const trustedPrepared = createJsonMapRepository(split.shell.mapIndex, {
+      read: () => changedBytes,
+      prepare: async () => {},
+    }, { verify: false });
+    await trustedPrepared.prepare!(start.meta.id);
+    expect(trustedPrepared.acquire(start.meta.id).id).toBe(start.meta.id);
+  });
+
+  test("missing local entries are errors while async entries can be prepared", () => {
+    const split = splitProjectMaps(fixture());
+    const local = createJsonMapRepository(split.shell.mapIndex, { read: () => undefined });
+    expect(() => local.acquire("map_00")).toThrow(/missing entry/);
+    try {
+      local.acquire("map_00");
+    } catch (error) {
+      expect(error).not.toBeInstanceOf(MapNotReadyError);
+    }
+
+    const remote = createJsonMapRepository(split.shell.mapIndex, {
+      read: () => undefined,
+      prepare: async () => {},
+    });
+    expect(() => remote.acquire("map_00")).toThrow(MapNotReadyError);
+    expect(() => remote.acquire("map_00")).toThrow(/not ready/);
+  });
+
+  test("an inline session reports its own unknown maps without mentioning a repository", () => {
+    const session = createSession(fixture());
+    expect(() => acquireSessionMap(session, "missing")).toThrow("session: unknown map missing");
+  });
+
   test("the splitter emits sorted, byte-stable shell and map entries", () => {
     const project = fixture();
     project.maps.reverse();
@@ -125,6 +183,157 @@ describe("sharded map repository", () => {
       expect(entry.meta.sha256).toBe(sha256Text(entry.text));
       expect(entry.meta.sha256).toBe(mapChecksum(JSON.parse(entry.text)));
     }
+  });
+
+  test("map entries are stable ASCII JSON and the byte reader decodes in bounded chunks", () => {
+    const project = fixture();
+    project.maps[0]!.name = "Caf\u00e9 \ud83d\ude80";
+    project.maps[0]!.width = 256;
+    project.maps[0]!.height = 40;
+    project.maps[0]!.ground = new Array(256 * 40).fill("tiles.0");
+    const first = splitProjectMaps(project);
+    const second = splitProjectMaps(project);
+    const entry = first.entries[0]!;
+    expect(entry.text).toBe(second.entries[0]!.text);
+    expect(entry.text).not.toMatch(/[^\x00-\x7f]/);
+    expect(entry.text).toContain("Caf\\u00e9 \\ud83d\\ude80");
+    expect(JSON.parse(entry.text)).toEqual(project.maps[0]);
+    expect(entry.text).toBe(canonicalMapJson(project.maps[0]!));
+    expect(decodeMapEntryBytes(entry.bytes)).toBe(entry.text);
+
+    const legacyUtf8 = utf8Encode('{"name":"Caf\u00e9 \ud83d\ude80"}');
+    expect(decodeMapEntryBytes(legacyUtf8)).toBe('{"name":"Caf\u00e9 \ud83d\ude80"}');
+    expect(() => decodeMapEntryBytes(new Uint8Array([0xc0, 0x80]))).toThrow(/invalid UTF-8/);
+  });
+
+  test("the repository accepts raw entry bytes", () => {
+    const split = splitProjectMaps(fixture());
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+    const repository = createJsonMapRepository(split.shell.mapIndex, {
+      read: (entry) => files.get(entry),
+    }, { verify: true });
+    expect(repository.acquire("map_00")).toEqual(fixture().maps[0]);
+  });
+
+  test("a faded transfer prepares fixed units before the original swap tick", () => {
+    const project = fixture();
+    (project.maps[0]!.events![0]!.pages[0]!.commands[0] as { fade?: number }).fade = 0.4;
+    const split = splitProjectMaps(project);
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+    const base = createJsonMapRepository(split.shell.mapIndex, {
+      read: (entry) => files.get(entry),
+    });
+    let fullAcquires = 0;
+    let acquireSteps = 0;
+    const repository: MapRepository = {
+      meta: base.meta,
+      acquire(id) {
+        fullAcquires++;
+        return base.acquire(id);
+      },
+      acquireStep(id) {
+        acquireSteps++;
+        return base.acquireStep!(id);
+      },
+      releaseExcept: base.releaseExcept,
+    };
+    const session = createSession(split.shell, 60, repository);
+    let state = startSession(split.shell, session);
+    fullAcquires = 0;
+
+    state = stepSession(session, state, { buttons: 0, confirmEdge: true });
+    expect(state.fade).toEqual({ phase: "out", left: 12, half: 12 });
+    expect(acquireSteps).toBe(0);
+    state = stepSession(session, state, { buttons: 0 });
+    expect(acquireSteps).toBe(1); // read + ASCII decode + JSON.parse
+    expect(session.maps.has("map_01")).toBe(false);
+    state = stepSession(session, state, { buttons: 0 });
+    expect(acquireSteps).toBe(2); // integrity + structural validation
+    expect(session.maps.has("map_01")).toBe(false);
+    state = stepSession(session, state, { buttons: 0 }); // compile
+    expect(acquireSteps).toBe(2);
+    expect(session.maps.has("map_01")).toBe(false);
+    for (let tick = 0; tick < 8; tick++) state = stepSession(session, state, { buttons: 0 });
+    expect(state.mapId).toBe("map_00");
+    state = stepSession(session, state, { buttons: 0 });
+    expect(state.mapId).toBe("map_01");
+    expect(fullAcquires).toBe(0);
+    expect([...session.maps.keys()]).toEqual(["map_01"]);
+  });
+
+  test("a zero-fade transfer keeps its all-at-once acquire", () => {
+    const split = splitProjectMaps(fixture());
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+    const base = createJsonMapRepository(split.shell.mapIndex, {
+      read: (entry) => files.get(entry),
+    });
+    let fullAcquires = 0;
+    let acquireSteps = 0;
+    const repository: MapRepository = {
+      meta: base.meta,
+      acquire(id) {
+        fullAcquires++;
+        return base.acquire(id);
+      },
+      acquireStep(id) {
+        acquireSteps++;
+        return base.acquireStep!(id);
+      },
+      releaseExcept: base.releaseExcept,
+    };
+    const session = createSession(split.shell, 60, repository);
+    let state = startSession(split.shell, session);
+    fullAcquires = 0;
+    state = stepSession(session, state, { buttons: 0, confirmEdge: true });
+    expect(state.mapId).toBe("map_01");
+    expect(state.fade).toBeNull();
+    expect(fullAcquires).toBe(1);
+    expect(acquireSteps).toBe(0);
+  });
+
+  test("the splitter rejects a map that fails the full command schema", () => {
+    const project = fixture();
+    (project.maps[0]!.events![0]!.pages[0]!.commands[0] as { op: string }).op = "unknown";
+    expect(() => splitProjectMaps(project)).toThrow(/schema mismatch/);
+  });
+
+  test("runtime structure validation checks compilation-critical shapes", () => {
+    const valid = fixture().maps[0]!;
+    const cases: [string, (map: Record<string, unknown>) => void, RegExp][] = [
+      ["id", (map) => { map.id = 7; }, /id must be a non-empty string/],
+      ["width", (map) => { map.width = 0; }, /width must be a positive integer/],
+      ["height", (map) => { map.height = 1.5; }, /height must be a positive integer/],
+      ["ground array", (map) => { map.ground = null; }, /ground must be an array/],
+      ["ground length", (map) => { (map.ground as unknown[]).pop(); }, /ground has 15 cells/],
+      ["ground element", (map) => { (map.ground as unknown[])[0] = 4; }, /ground cell 0/],
+      ["upper shape", (map) => { map.upper = ["bad"]; }, /upper entries/],
+      ["upper bound", (map) => { map.upper = [[16, "tiles.0"]]; }, /upper index 16 out of range/],
+      ["passage bound", (map) => { map.passage = [[-1, "pass"]]; }, /passage index -1 out of range/],
+      ["events", (map) => { map.events = null; }, /events must be an array/],
+      ["pages", (map) => { (map.events as Record<string, unknown>[])[0]!.pages = null; }, /pages must be an array/],
+      ["commands", (map) => {
+        const event = (map.events as Record<string, unknown>[])[0]!;
+        (event.pages as Record<string, unknown>[])[0]!.commands = null;
+      }, /commands must be an array/],
+    ];
+    for (const [name, mutate, error] of cases) {
+      const value = structuredClone(valid) as unknown as Record<string, unknown>;
+      mutate(value);
+      expect(() => validateMapDefStructure(value), name).toThrow(error);
+    }
+  });
+
+  test("runtime defaults to structural validation and supports full validation", () => {
+    const split = splitProjectMaps(fixture());
+    const start = split.entries[0]!;
+    const invalidCommand = JSON.parse(start.text) as MapDef;
+    (invalidCommand.events![0]!.pages[0]!.commands[0] as { op: string }).op = "unknown";
+    const text = canonicalJson(invalidCommand);
+    const source = { read: () => text };
+    expect(createJsonMapRepository(split.shell.mapIndex, source).acquire(start.meta.id))
+      .toEqual(invalidCommand);
+    const full = createJsonMapRepository(split.shell.mapIndex, source, { validate: "full" });
+    expect(() => full.acquire(start.meta.id)).toThrow(/schema mismatch/);
   });
 
   test("startup acquires only the start map; transfers evict and revisits reacquire", () => {
@@ -259,7 +468,7 @@ describe("sharded map repository", () => {
 
     const checksumRepository = createJsonMapRepository(split.shell.mapIndex, {
       read: (entry) => entry === start.path ? `${start.text} ` : split.entries.find((item) => item.path === entry)?.text,
-    });
+    }, { verify: true });
     expect(() => createSession(split.shell, 60, checksumRepository)).toThrow(/checksum mismatch/);
   });
 });
@@ -277,6 +486,34 @@ describe("sharded maps keep project system options", () => {
       state = stepSession(session, state, { buttons: 0 });
     }
     expect(state.mapId).toBe("map_01");
+    expect(session.worlds.get("map_01")!.messageBlocksPlayer).toBe(true);
+  });
+
+  test("worlds prepared in fade-out units carry system.messageBlocksPlayer", () => {
+    const project: Project = { ...fixture(), system: { messageBlocksPlayer: true } };
+    (project.maps[0]!.events![0]!.pages[0]!.commands[0] as { fade?: number }).fade = 0.4;
+    const split = splitProjectMaps(project);
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+    const base = createJsonMapRepository(split.shell.mapIndex, {
+      read: (entry) => files.get(entry),
+    });
+    let fullAcquires = 0;
+    const repository: MapRepository = {
+      ...base,
+      acquire(id) {
+        fullAcquires++;
+        return base.acquire(id);
+      },
+    };
+    const session = createSession(split.shell, 60, repository);
+    let state = startSession(split.shell, session);
+    fullAcquires = 0;
+    state = stepSession(session, state, { buttons: 0, confirmEdge: true });
+    for (let i = 0; i < 40 && state.mapId === "map_00"; i++) {
+      state = stepSession(session, state, { buttons: 0 });
+    }
+    expect(state.mapId).toBe("map_01");
+    expect(fullAcquires).toBe(0);
     expect(session.worlds.get("map_01")!.messageBlocksPlayer).toBe(true);
   });
 });

@@ -155,6 +155,13 @@ export interface SessionInput {
   downEdge?: boolean;
 }
 
+interface SessionMapPreparation {
+  id: string;
+  map?: MapDef;
+  world?: ReturnType<typeof createWorld>;
+  table?: PassageTable;
+}
+
 export interface Session {
   cfg: MovementConfig;
   /** Host virtual frames per second. */
@@ -172,6 +179,9 @@ export interface Session {
   /** Content identity copied into save envelopes for sharded projects. */
   content: MapContentIdentity | null;
   repository: MapRepository | null;
+  /** Partially prepared transfer target. Derived only: never serialized or
+   * exposed to event logic. */
+  preparingMap: SessionMapPreparation | null;
   sheets: ReadonlyMap<string, Sheet>;
   commonEvents: CommonEvent[];
   /** Project.system options every compiled world (eager or on demand) uses. */
@@ -181,15 +191,26 @@ export interface Session {
 /** Acquire, validate and compile one map into the derived session cache. */
 export function acquireSessionMap(sess: Session, id: string): MapDef {
   const hit = sess.maps.get(id);
-  if (hit) return hit;
+  if (hit) {
+    if (sess.preparingMap?.id === id) sess.preparingMap = null;
+    return hit;
+  }
   const expected = sess.mapIndex?.get(id);
   const repository = sess.repository;
-  if (!expected || !repository) throw new Error(`map repository: unknown map ${id}`);
+  if (!expected || !repository) throw new Error(`session: unknown map ${id}`);
   const actual = repository.meta(id);
   if (!actual || actual.id !== expected.id || actual.width !== expected.width ||
     actual.height !== expected.height || actual.entry !== expected.entry ||
     actual.sha256 !== expected.sha256) {
     throw new Error(`map repository: manifest metadata mismatch for ${id}`);
+  }
+  const prepared = sess.preparingMap?.id === id ? sess.preparingMap : null;
+  if (prepared?.map && prepared.world && prepared.table) {
+    sess.maps.set(id, prepared.map);
+    sess.worlds.set(id, prepared.world);
+    sess.tables.set(id, prepared.table);
+    sess.preparingMap = null;
+    return prepared.map;
   }
   const map = repository.acquire(id);
   if (map.id !== expected.id || map.width !== expected.width || map.height !== expected.height) {
@@ -202,7 +223,45 @@ export function acquireSessionMap(sess: Session, id: string): MapDef {
   sess.maps.set(id, map);
   sess.worlds.set(id, world);
   sess.tables.set(id, table);
+  if (sess.preparingMap?.id === id) sess.preparingMap = null;
   return map;
+}
+
+/** Perform at most one fixed preparation unit for a synchronous repository:
+ * repository parse, repository validation, then world + passage compilation.
+ * Completed data remains derived and unpublished until acquireSessionMap at
+ * the original transfer boundary. */
+export function prepareSessionMapStep(sess: Session, id: string): boolean {
+  if (sess.maps.has(id)) return true;
+  const expected = sess.mapIndex?.get(id);
+  const repository = sess.repository;
+  if (!expected || !repository) throw new Error(`session: unknown map ${id}`);
+  const actual = repository.meta(id);
+  if (!actual || actual.id !== expected.id || actual.width !== expected.width ||
+    actual.height !== expected.height || actual.entry !== expected.entry ||
+    actual.sha256 !== expected.sha256) {
+    throw new Error(`map repository: manifest metadata mismatch for ${id}`);
+  }
+  if (!repository.acquireStep) return false;
+  if (sess.preparingMap?.id !== id) sess.preparingMap = { id };
+  const preparation = sess.preparingMap;
+  if (!preparation.map) {
+    const map = repository.acquireStep(id);
+    if (map) {
+      if (map.id !== expected.id || map.width !== expected.width || map.height !== expected.height) {
+        throw new Error(`map repository: payload metadata mismatch for ${id}`);
+      }
+      preparation.map = map;
+    }
+    return false;
+  }
+  if (!preparation.world || !preparation.table) {
+    const world = createWorld(preparation.map, sess.commonEvents, MOTION_HZ, sess.worldOptions);
+    const table = buildPassage(preparation.map, sess.sheets);
+    preparation.world = world;
+    preparation.table = table;
+  }
+  return true;
 }
 
 /** Prepare web-backed bytes (when supported) and compile them outside the
@@ -211,7 +270,7 @@ export function acquireSessionMap(sess: Session, id: string): MapDef {
 export async function prepareSessionMap(sess: Session, id: string): Promise<void> {
   if (sess.maps.has(id)) return;
   if (!sess.repository || !sess.mapIndex?.has(id)) {
-    throw new Error(`map repository: unknown map ${id}`);
+    throw new Error(`session: unknown map ${id}`);
   }
   await sess.repository.prepare?.(id);
   acquireSessionMap(sess, id);
@@ -225,6 +284,7 @@ export function releaseSessionMapsExcept(sess: Session, ids: readonly string[]):
   for (const id of [...sess.maps.keys()]) if (!keep.has(id)) sess.maps.delete(id);
   for (const id of [...sess.worlds.keys()]) if (!keep.has(id)) sess.worlds.delete(id);
   for (const id of [...sess.tables.keys()]) if (!keep.has(id)) sess.tables.delete(id);
+  if (sess.preparingMap && !keep.has(sess.preparingMap.id)) sess.preparingMap = null;
   sess.repository.releaseExcept(ids);
 }
 
@@ -261,6 +321,7 @@ export function createSession(
       mapIndex: index,
       content: { manifest, schema: MAP_SCHEMA_HASH },
       repository: maps,
+      preparingMap: null,
       sheets,
       commonEvents,
       worldOptions,
@@ -288,6 +349,7 @@ export function createSession(
     mapIndex: null,
     content: null,
     repository: null,
+    preparingMap: null,
     sheets,
     commonEvents,
     worldOptions,
@@ -477,6 +539,10 @@ function stepReferenceTick(
 
   // -- fade: gameplay and input freeze while the overlay moves -----------
   if (s.fade) {
+    if (s.fade.phase === "out") {
+      const transfer = s.interp.pendingTransfer;
+      if (transfer) prepareSessionMapStep(sess, transfer.map);
+    }
     s.fade.left--;
     if (s.fade.left > 0) return { x: s.move.tx, y: s.move.ty };
     if (s.fade.phase === "out") {

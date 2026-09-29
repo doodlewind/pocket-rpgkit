@@ -7,8 +7,10 @@
 import { canonicalJson, utf8Encode } from "../../src/engine/save.ts";
 import {
   MAP_SCHEMA_HASH,
-  mapChecksum,
+  canonicalMapJson,
   mapManifestHash,
+  sha256Text,
+  validateMapDef,
 } from "../../src/engine/map-repository.ts";
 import type {
   MapIndexEntry,
@@ -45,6 +47,7 @@ export function splitProjectMaps(
 ): SplitProjectMaps {
   const shellEntry = options.shellEntry ?? "project.json";
   const mapEntry = options.mapEntry ?? ((id: string) => `maps/${id}.json`);
+  for (const map of project.maps) validateMapDef(map);
   const maps = [...project.maps].sort((a, b) => compareText(a.id, b.id));
   const ids = new Set<string>();
   const paths = new Set<string>([shellEntry]);
@@ -55,13 +58,13 @@ export function splitProjectMaps(
     if (!path) throw new Error(`splitProjectMaps: empty entry for ${map.id}`);
     if (paths.has(path)) throw new Error(`splitProjectMaps: duplicate output path ${path}`);
     paths.add(path);
-    const text = canonicalJson(map);
+    const text = canonicalMapJson(map);
     const meta: MapIndexEntry = {
       id: map.id,
       width: map.width,
       height: map.height,
       entry: path,
-      sha256: mapChecksum(map),
+      sha256: sha256Text(text),
     };
     return { path, text, bytes: utf8Encode(text), meta };
   });

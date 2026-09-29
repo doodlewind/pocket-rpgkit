@@ -409,10 +409,11 @@ simDescribe("sunstone — render budget", () => {
     // renderers, both walker heights, the extended event model (areas,
     // compound and facing conditions, place, input lock) and the movement
     // extensions (one-sided passage, routes on any event, turn/pathTo/
-    // approach, memoized passage cooking) and the current-map actor plane
-    // with row-sliced upper occlusion: 365 KB. The bound keeps a few
+    // approach, memoized passage cooking), the current-map actor plane with
+    // row-sliced upper occlusion, and the on-demand map repository with
+    // deterministic staged transfer loading: 381 KB. The bound keeps a few
     // percent of headroom so an accidental bundle-in still trips it.
-    expect(jsBytes).toBeLessThan(380_000);
+    expect(jsBytes).toBeLessThan(395_000);
   });
 });
 

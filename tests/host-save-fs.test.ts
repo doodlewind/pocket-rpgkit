@@ -21,6 +21,7 @@ import {
   SaveError,
   type SaveSnapshot,
 } from "../src/engine/save.ts";
+import type { MapContentIdentity } from "../src/engine/map-repository.ts";
 import {
   createInterpState,
   createSwitchState,
@@ -29,6 +30,7 @@ import { initialMovement } from "../src/engine/movement.ts";
 
 const g = globalThis as { fs?: unknown };
 let host: SimFsHost | null = null;
+const CONTENT: MapContentIdentity = { manifest: "manifest-a", schema: "schema-a" };
 
 function mount(): SimFsHost {
   host = createSimFsHost();
@@ -93,6 +95,18 @@ describe("P1⑤ save — fs slot write/read", () => {
     // guest reload keeps its data root.
     expect(fsSaveStore()!.exists(1)).toBe(true);
     expect(loadSlotFs(1).map).toBe("map-a");
+  });
+
+  test("content identity is written and enforced by load and slot listing", () => {
+    mount();
+    const s = snap("sharded-map", 7, 23);
+    saveSlotFs(2, s, CONTENT);
+    expect(loadSlotFs(2, CONTENT)).toEqual(s);
+    expect(listSlotsFs(CONTENT)[1]).toMatchObject({ slot: 2, map: "sharded-map", frame: 23 });
+
+    const other = { ...CONTENT, manifest: "manifest-b" };
+    expect(() => loadSlotFs(2, other)).toThrow(/manifest hash/);
+    expect(listSlotsFs(other)[1]).toMatchObject({ slot: 2, error: expect.stringMatching(/manifest hash/) });
   });
 });
 

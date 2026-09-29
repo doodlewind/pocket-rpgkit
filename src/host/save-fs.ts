@@ -9,6 +9,7 @@
 // engine/save.ts plus a slot lister for the menu.
 
 import { file, fsHost, write } from "@pocketjs/framework/fs";
+import type { MapContentIdentity } from "../engine/map-repository.ts";
 import {
   loadFromStore,
   saveToStore,
@@ -52,29 +53,38 @@ export function fsSaveStore(): SaveStore | null {
   return store;
 }
 
-export function saveSlotFs(slot: number, snapshot: SaveSnapshot): void {
+export function saveSlotFs(
+  slot: number,
+  snapshot: SaveSnapshot,
+  content?: MapContentIdentity | null,
+): void {
   const s = fsSaveStore();
   if (!s) throw new Error("save: fs module is not mounted on this target");
-  saveToStore(s, slot, snapshot);
+  saveToStore(s, slot, snapshot, content);
 }
 
-export function loadSlotFs(slot: number): SaveSnapshot {
+export function loadSlotFs(
+  slot: number,
+  content?: MapContentIdentity | null,
+): SaveSnapshot {
   const s = fsSaveStore();
   if (!s) throw new Error("save: fs module is not mounted on this target");
-  return loadFromStore(s, slot);
+  return loadFromStore(s, slot, content);
 }
 
 /** Summaries of the three fixed slots; null entries are empty slots.
  *  A file that fails checksum/version is listed as a slot with an error
  *  code so the menu can show it as corrupt rather than silently empty. */
-export function listSlotsFs(): (FsSlotInfo | { slot: number; error: string } | null)[] {
+export function listSlotsFs(
+  content?: MapContentIdentity | null,
+): (FsSlotInfo | { slot: number; error: string } | null)[] {
   const s = fsSaveStore();
   if (!s) return [null, null, null];
   return [1, 2, 3].map((slot) => {
     const text = s.read(slot);
     if (text === null) return null;
     try {
-      return { ...summarizeEnvelope(slot, text) };
+      return { ...summarizeEnvelope(slot, text, content) };
     } catch (e) {
       return { slot, error: (e as Error).message };
     }

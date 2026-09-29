@@ -96,7 +96,15 @@ export function sha256Bytes(input: Uint8Array): string {
 }
 
 export const sha256Text = (text: string): string => sha256Bytes(utf8Encode(text));
-export const canonicalMapJson = (map: MapDef): string => canonicalJson(map);
+const escapeNonAscii = (text: string): string => text.replace(
+  /[^\x00-\x7f]/g,
+  (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+);
+
+/** Canonical map JSON with every non-ASCII UTF-16 code unit escaped. This is
+ * JSON-equivalent to canonicalJson(map), byte-stable, and lets packaged map
+ * entries take the repository's fast ASCII decode path. */
+export const canonicalMapJson = (map: MapDef): string => escapeNonAscii(canonicalJson(map));
 export const mapChecksum = (map: MapDef): string => sha256Text(canonicalMapJson(map));
 
 /** The schema identity is conservative: any normative project-schema change
@@ -138,23 +146,79 @@ function formatErrors(errors: readonly VError[]): string {
   return errors.slice(0, 3).map((e) => `${e.path}: ${e.msg}`).join("; ");
 }
 
-/** Validate one acquired map against the normative map schema plus the
- * row-major/index bounds that JSON Schema cannot express. */
+function mapStructureError(detail: string): never {
+  throw new Error(`map repository: structure mismatch: ${detail}`);
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Cheap runtime safety check for a map already validated when it was split.
+ * It covers every array shape/index used before or during compilation without
+ * walking the command schema or matching tile-id regular expressions. */
+export function validateMapDefStructure(map: unknown): asserts map is MapDef {
+  if (!isObject(map)) mapStructureError("map must be an object");
+  const value = map as Record<string, unknown>;
+  if (typeof value.id !== "string" || value.id.length === 0) {
+    mapStructureError("id must be a non-empty string");
+  }
+  if (!Number.isInteger(value.width) || (value.width as number) < 1) {
+    mapStructureError(`${value.id} width must be a positive integer`);
+  }
+  if (!Number.isInteger(value.height) || (value.height as number) < 1) {
+    mapStructureError(`${value.id} height must be a positive integer`);
+  }
+  const ground = value.ground;
+  if (!Array.isArray(ground)) mapStructureError(`${value.id} ground must be an array`);
+  const cells = (value.width as number) * (value.height as number);
+  if (ground.length !== cells) {
+    throw new Error(`map repository: ${value.id} ground has ${ground.length} cells, expected ${cells}`);
+  }
+  for (let index = 0; index < ground.length; index++) {
+    const tile = ground[index];
+    if (tile !== null && typeof tile !== "string") {
+      mapStructureError(`${value.id} ground cell ${index} must be a string or null`);
+    }
+  }
+  const sparseLayer = (name: "upper" | "passage"): void => {
+    const layer = value[name];
+    if (layer === undefined) return;
+    if (!Array.isArray(layer)) mapStructureError(`${value.id} ${name} must be an array`);
+    for (const item of layer) {
+      if (!Array.isArray(item) || item.length !== 2 || !Number.isInteger(item[0])) {
+        mapStructureError(`${value.id} ${name} entries must be [integer, value] pairs`);
+      }
+      const index = item[0] as number;
+      if (index < 0 || index >= cells) {
+        throw new Error(`map repository: ${value.id} ${name} index ${index} out of range`);
+      }
+    }
+  };
+  sparseLayer("upper");
+  sparseLayer("passage");
+  const events = value.events;
+  if (!Array.isArray(events)) mapStructureError(`${value.id} events must be an array`);
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
+    const event = events[eventIndex];
+    if (!isObject(event) || !Array.isArray(event.pages)) {
+      mapStructureError(`${value.id} event ${eventIndex} pages must be an array`);
+    }
+    for (let pageIndex = 0; pageIndex < event.pages.length; pageIndex++) {
+      const page = event.pages[pageIndex];
+      if (!isObject(page) || !Array.isArray(page.commands)) {
+        mapStructureError(`${value.id} event ${eventIndex} page ${pageIndex} commands must be an array`);
+      }
+    }
+  }
+}
+
+/** Validate one map against the normative map schema plus the row-major/index
+ * bounds that JSON Schema cannot express. Splitters use this full check. */
 export function validateMapDef(map: unknown): asserts map is MapDef {
   const mapSchema = (PROJECT_SCHEMA as { $defs: { map: Record<string, unknown> } }).$defs.map;
   const errors = validateSchema(PROJECT_SCHEMA, map, mapSchema);
   if (errors.length > 0) throw new Error(`map repository: schema mismatch: ${formatErrors(errors)}`);
-  const value = map as MapDef;
-  const cells = value.width * value.height;
-  if (value.ground.length !== cells) {
-    throw new Error(`map repository: ${value.id} ground has ${value.ground.length} cells, expected ${cells}`);
-  }
-  for (const [index] of value.upper ?? []) {
-    if (index < 0 || index >= cells) throw new Error(`map repository: ${value.id} upper index ${index} out of range`);
-  }
-  for (const [index] of value.passage ?? []) {
-    if (index < 0 || index >= cells) throw new Error(`map repository: ${value.id} passage index ${index} out of range`);
-  }
+  validateMapDefStructure(map);
 }
 
 export function validateMapIndex(entries: readonly MapIndexEntry[]): Map<string, MapIndexEntry> {
@@ -181,48 +245,143 @@ export class MapNotReadyError extends Error {
   }
 }
 
+function decodeUtf8(bytes: Uint8Array): string {
+  let out = "";
+  let index = 0;
+  while (index < bytes.length) {
+    const first = bytes[index++]!;
+    if (first < 0x80) {
+      out += String.fromCharCode(first);
+      continue;
+    }
+    let code: number;
+    let extra: number;
+    if ((first & 0xe0) === 0xc0) {
+      code = first & 0x1f;
+      extra = 1;
+    } else if ((first & 0xf0) === 0xe0) {
+      code = first & 0x0f;
+      extra = 2;
+    } else if ((first & 0xf8) === 0xf0) {
+      code = first & 0x07;
+      extra = 3;
+    } else {
+      throw new Error("map repository: invalid UTF-8 entry");
+    }
+    if (index + extra > bytes.length) throw new Error("map repository: invalid UTF-8 entry");
+    for (let offset = 0; offset < extra; offset++) {
+      const next = bytes[index++]!;
+      if ((next & 0xc0) !== 0x80) throw new Error("map repository: invalid UTF-8 entry");
+      code = (code << 6) | (next & 0x3f);
+    }
+    if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ||
+      (extra === 1 && code < 0x80) || (extra === 2 && code < 0x800) ||
+      (extra === 3 && code < 0x10000)) {
+      throw new Error("map repository: invalid UTF-8 entry");
+    }
+    if (code < 0x10000) {
+      out += String.fromCharCode(code);
+    } else {
+      code -= 0x10000;
+      out += String.fromCharCode(0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff));
+    }
+  }
+  return out;
+}
+
+/** Decode a map entry without paying the general UTF-8 loop for the ASCII
+ * output emitted by splitProjectMaps. The bounded chunks avoid engine
+ * argument limits; legacy/non-ASCII bytes fall back to strict UTF-8. */
+export function decodeMapEntryBytes(bytes: Uint8Array): string {
+  let out = "";
+  const chunkSize = 8192;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+    for (let index = 0; index < chunk.length; index++) {
+      if (chunk[index]! > 0x7f) return decodeUtf8(bytes);
+    }
+    out += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return out;
+}
+
 export interface MapEntrySource {
-  read(entry: string): string | undefined;
+  read(entry: string): string | Uint8Array | undefined;
   prepare?(entry: string): Promise<void>;
 }
 
-/** A validated repository over local strings or asynchronously prepared web
- * strings. Parsed maps are evicted exactly when releaseExcept requests it. */
+export interface JsonMapRepositoryOptions {
+  /** Recompute each entry's build-time SHA-256 before parsing it.
+   * Defaults to false for synchronous package sources and true when the
+   * source exposes async preparation (normally a browser/network source). */
+  verify?: boolean;
+  /** Full schema validation is useful for untrusted authoring inputs. Runtime
+   * entries default to the cheaper structural safety check because the kit
+   * splitter has already run the full normative schema. */
+  validate?: "structure" | "full";
+}
+
+/** A runtime-validated repository over local strings/bytes or asynchronously
+ * prepared web entries. Parsed maps are evicted exactly when releaseExcept
+ * requests it. */
 export function createJsonMapRepository(
   entries: readonly MapIndexEntry[],
   source: MapEntrySource,
+  options: JsonMapRepositoryOptions = {},
 ): MapRepository {
   const index = validateMapIndex(entries);
   const cache = new Map<string, MapDef>();
-  return {
-    meta: (id) => index.get(id),
-    acquire(id) {
-      const hit = cache.get(id);
-      if (hit) return hit;
-      const meta = index.get(id);
-      if (!meta) throw new Error(`map repository: unknown map ${id}`);
-      const text = source.read(meta.entry);
-      if (text === undefined) throw new MapNotReadyError(id, meta.entry);
-      if (sha256Text(text) !== meta.sha256) {
-        throw new Error(`map repository: checksum mismatch for ${id} (${meta.entry})`);
+  const pending = new Map<string, { input: string | Uint8Array; value: unknown }>();
+  const verify = options.verify ?? source.prepare !== undefined;
+  const acquireStep = (id: string): MapDef | undefined => {
+    const hit = cache.get(id);
+    if (hit) return hit;
+    const meta = index.get(id);
+    if (!meta) throw new Error(`map repository: unknown map ${id}`);
+    const staged = pending.get(id);
+    if (!staged) {
+      const input = source.read(meta.entry);
+      if (input === undefined) {
+        if (source.prepare) throw new MapNotReadyError(id, meta.entry);
+        throw new Error(`map repository: missing entry for ${id} (${meta.entry})`);
       }
+      const text = typeof input === "string" ? input : decodeMapEntryBytes(input);
       let value: unknown;
       try {
         value = JSON.parse(text);
       } catch {
         throw new Error(`map repository: ${id} (${meta.entry}) is not JSON`);
       }
-      validateMapDef(value);
-      const map = value;
-      if (map.id !== meta.id || map.width !== meta.width || map.height !== meta.height) {
-        throw new Error(`map repository: metadata mismatch for ${id}`);
-      }
-      cache.set(id, map);
+      pending.set(id, { input, value });
+      return undefined;
+    }
+    if (verify && (typeof staged.input === "string"
+      ? sha256Text(staged.input)
+      : sha256Bytes(staged.input)) !== meta.sha256) {
+      throw new Error(`map repository: checksum mismatch for ${id} (${meta.entry})`);
+    }
+    if (options.validate === "full") validateMapDef(staged.value);
+    else validateMapDefStructure(staged.value);
+    const map = staged.value as MapDef;
+    if (map.id !== meta.id || map.width !== meta.width || map.height !== meta.height) {
+      throw new Error(`map repository: metadata mismatch for ${id}`);
+    }
+    pending.delete(id);
+    cache.set(id, map);
+    return map;
+  };
+  return {
+    meta: (id) => index.get(id),
+    acquire(id) {
+      let map: MapDef | undefined;
+      while (map === undefined) map = acquireStep(id);
       return map;
     },
+    ...(source.prepare ? {} : { acquireStep }),
     releaseExcept(ids) {
       const keep = new Set(ids);
       for (const id of [...cache.keys()]) if (!keep.has(id)) cache.delete(id);
+      for (const id of [...pending.keys()]) if (!keep.has(id)) pending.delete(id);
     },
     ...(source.prepare ? {
       prepare: async (id: string) => {

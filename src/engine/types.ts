@@ -317,11 +317,17 @@ export type ProjectSource = Project | ProjectShell;
  * input frame after prepare() resolves. */
 export interface MapRepository {
   meta(id: string): MapIndexEntry | undefined;
-  /** Return a schema-validated MapDef. Implementations that decode untyped
-   * bytes should validate before returning; createJsonMapRepository is the
-   * standard JSON implementation. Session additionally verifies repository
-   * metadata and payload dimensions against mapIndex. */
+  /** Return a runtime-validated MapDef. Implementations that decode untyped
+   * bytes should validate before returning; createJsonMapRepository checks
+   * compilation-critical structure by default and offers full schema
+   * validation. Session additionally verifies repository metadata and
+   * payload dimensions against mapIndex. */
   acquire(id: string): MapDef;
+  /** Optional deterministic preparation unit for synchronous repositories.
+   * One call performs at most one implementation-defined unit and returns
+   * the map only once repository work is complete. Session uses this during
+   * a non-zero transfer fade; acquire() still completes all remaining work. */
+  acquireStep?(id: string): MapDef | undefined;
   releaseExcept(ids: readonly string[]): void;
   prepare?(id: string): Promise<void>;
 }

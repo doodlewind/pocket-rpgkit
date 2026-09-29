@@ -257,7 +257,7 @@ import { readFileSync } from "@pocketjs/framework/fs";
 import { createJsonMapRepository } from "./vendor/pocket-rpgkit/src/engine/map-repository.ts";
 
 const repository = createJsonMapRepository(project.mapIndex, {
-  read: (entry) => readFileSync(entry, "utf8"),
+  read: (entry) => readFileSync(entry),
 });
 
 mount(() => <GameView
@@ -267,6 +267,18 @@ mount(() => <GameView
 />);
 ```
 
+The splitter fully validates every map and escapes non-ASCII characters as
+JSON `\uXXXX` sequences, making each entry stable ASCII bytes. Returning bytes
+from `read` lets the standard repository decode those entries in bounded 8 KiB
+`String.fromCharCode` chunks; a hand-authored entry containing bytes above
+`0x7f` automatically falls back to strict UTF-8 decoding. A synchronous source
+is trusted like the application bundle and skips the entry SHA-256 by default;
+pass `{ verify: true }` as the third argument to recheck it. A source with
+`prepare` defaults to checksum verification because it normally crosses a
+network boundary. Runtime loading checks compilation-critical structure by
+default because the splitter already performed the full schema check; pass
+`{ validate: "full" }` as the third argument for untrusted authoring inputs.
+
 `createSession(project, hz, repository)` synchronously validates and compiles
 only the starting map. A transfer acquires its destination, then evicts the
 old parsed map, interpreter world and passage table. These caches and the
@@ -274,15 +286,21 @@ view's current-map actor list are derived data: they are absent from reducer
 state, replay hashes and saves. For a shell project, save envelopes carry the
 shell manifest and map-schema identities; `restoreSessionEnvelope` rejects a
 different content build before acquiring the saved map, or reacquires that
-map if it was evicted.
+map if it was evicted. A non-zero transfer fade lets the standard synchronous
+repository prepare one fixed unit per reference tick (read/decode/parse,
+validation, then world/passage compilation); the map is still published on
+the original fully-black tick. A zero-fade transfer keeps its single-frame
+synchronous acquire.
 
 A browser source may return `undefined` from `read` and implement async
 `prepare(entry)`. Keep the start entry ready before mounting. On a later miss,
 `GameView` pauses input and simulation, calls `prepare`, and retries the exact
 same host frame; `onMapLoading(mapId | null)` can drive a loading indicator.
 Fetch completion order therefore never enters simulation state. Custom
-repositories must give `acquire` the same synchronous, schema/checksum-
-validated contract as `createJsonMapRepository`.
+repositories must give `acquire` the same synchronous validated contract as
+`createJsonMapRepository`. A source with `prepare` must keep the bytes for any
+resident map synchronously readable: attract-mode rollback can reacquire an
+earlier resident map within the same host frame.
 
 ### The 18 commands
 
@@ -376,7 +394,9 @@ the app's data root replaces the built-in tape without a rebuild.
 Saves are FNV-checksummed envelopes over a safe-point snapshot (mover on a
 tile boundary, no modal, no parked request). Hosts with `data.fs` write
 three slots through `src/host/save-fs.ts`; other hosts exchange the same
-envelope as URL-safe base64 text (the save code).
+envelope as URL-safe base64 text (the save code). For a sharded project, pass
+`session.content` to `saveSlotFs`, `loadSlotFs` and `listSlotsFs`; this writes
+the build identity and rejects slots from another map manifest or schema.
 
 ### Large-map streamed rendering
 

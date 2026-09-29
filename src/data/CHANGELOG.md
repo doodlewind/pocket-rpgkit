@@ -145,5 +145,19 @@ fields and commands are optional and the v1 spellings keep their meaning.
   a character must give that page `blocks: true`. This repository's
   examples and goldens are unchanged.
 
+## v1 amendment — 2026-09-29 (on-demand map loading performance)
+
+- The standard JSON map repository skips redundant entry SHA-256 work for
+  trusted synchronous package sources and uses compilation-critical structural
+  validation by default. Async-prepared sources still verify checksums by
+  default, and callers can explicitly request checksum or full schema checks.
+- Split map entries are fully schema-validated at build time, emitted as stable
+  ASCII JSON, and may be read as bytes through the bounded fast decoder.
+- Non-zero transfer fades may prepare a destination in fixed deterministic
+  units before the original map-swap tick. Preparation remains derived cache
+  data; zero-fade transfers retain their all-at-once behavior.
+- Filesystem save helpers accept the shell content identity for writing,
+  loading and listing slots, so a different map manifest or schema is rejected.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.
