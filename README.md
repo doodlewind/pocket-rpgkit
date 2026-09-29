@@ -161,7 +161,7 @@ bun run desktop sunstone # build for the desktop host and open a window
 bun run web              # the browser site in dist/web (see above)
 ```
 
-On a Mac, `bun run package:macos sunstone` (or `grow`, `meadow`) makes a
+On a Mac, `bun run package:macos sunstone` (or `grow`, `wander`, `meadow`) makes a
 double-clickable `dist/macos/<Name>.app` plus a zip to hand around: the
 desktop host, the example's bundle and pak, an icon cropped from its
 golden frame, and the licenses. It is built for the Mac's own

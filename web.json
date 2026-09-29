@@ -9,10 +9,22 @@
       "preview": "tests/goldens/sunstone-attract.699.png",
       "viewport": "fixed",
       "controls": [
-        { "button": "DPAD", "action": "Walk, pick an answer. During the demo, any key takes over." },
-        { "button": "CIRCLE", "action": "Talk, confirm" },
-        { "button": "LTRIGGER", "action": "Rewind 3 seconds" },
-        { "button": "SELECT", "action": "Hand the game back to the demo" }
+        {
+          "button": "DPAD",
+          "action": "Walk, pick an answer. During the demo, any key takes over."
+        },
+        {
+          "button": "CIRCLE",
+          "action": "Talk, confirm"
+        },
+        {
+          "button": "LTRIGGER",
+          "action": "Rewind 3 seconds"
+        },
+        {
+          "button": "SELECT",
+          "action": "Hand the game back to the demo"
+        }
       ]
     },
     "grow": {
@@ -20,22 +32,80 @@
       "description": "Four settlements grow to the right from one seeded rule set. Scrub back to any moment, then walk into the finished village.",
       "preview": "tests/goldens/grow.720.png",
       "controls": [
-        { "buttons": ["LEFT", "RIGHT"], "action": "Step the timeline back or forward" },
-        { "button": "TRIANGLE", "action": "Pause or resume growing (TRI on screen)" },
-        { "button": "SQUARE", "action": "New seed (SQR on screen)" },
-        { "button": "CIRCLE", "action": "Walk into the finished village; talk" },
-        { "button": "DPAD", "action": "Walk, in the village" },
-        { "button": "LTRIGGER", "action": "Rewind 3 seconds, in the village" },
-        { "button": "SELECT", "action": "Back to the timeline" }
+        {
+          "buttons": [
+            "LEFT",
+            "RIGHT"
+          ],
+          "action": "Step the timeline back or forward"
+        },
+        {
+          "button": "TRIANGLE",
+          "action": "Pause or resume growing (TRI on screen)"
+        },
+        {
+          "button": "SQUARE",
+          "action": "New seed (SQR on screen)"
+        },
+        {
+          "button": "CIRCLE",
+          "action": "Walk into the finished village; talk"
+        },
+        {
+          "button": "DPAD",
+          "action": "Walk, in the village"
+        },
+        {
+          "button": "LTRIGGER",
+          "action": "Rewind 3 seconds, in the village"
+        },
+        {
+          "button": "SELECT",
+          "action": "Back to the timeline"
+        }
       ],
       "pointer": "Drag along the timeline strip at the bottom of the screen to scrub."
+    },
+    "wander": {
+      "title": "Wander: an Endless Grown World",
+      "description": "An unbounded world streamed in 32×32 chunks around the player: towns grow as you reach them, and chunks load ahead and unload behind within a fixed memory cap. Left alone it wanders by itself; the minimap shows the rings.",
+      "preview": "tests/goldens/wander.960.2100.png",
+      "controls": [
+        {
+          "button": "DPAD",
+          "action": "Walk. Any key takes over from the auto-walk; 10 idle seconds hand it back."
+        },
+        {
+          "button": "TRIANGLE",
+          "action": "Fast travel on or off (TRI on screen)"
+        },
+        {
+          "button": "SQUARE",
+          "action": "New seed (SQR on screen)"
+        },
+        {
+          "button": "SELECT",
+          "action": "Back to the auto-walk"
+        },
+        {
+          "button": "CIRCLE",
+          "action": "Read a town's notice board"
+        }
+      ],
+      "pointer": "Click or tap a tile to walk there."
     },
     "meadow": {
       "title": "Mini Meadow",
       "description": "The minimal example: one 20×12 map and four events, driven by the session reducer by hand.",
       "controls": [
-        { "button": "DPAD", "action": "Walk, pick an answer" },
-        { "button": "CIRCLE", "action": "Talk, confirm" }
+        {
+          "button": "DPAD",
+          "action": "Walk, pick an answer"
+        },
+        {
+          "button": "CIRCLE",
+          "action": "Talk, confirm"
+        }
       ]
     }
   }

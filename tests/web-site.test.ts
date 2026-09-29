@@ -51,8 +51,9 @@ describe("games", () => {
   });
 
   test("cards follow the metadata table, then the rest in build order", () => {
-    expect(cardOrder(["meadow", "sunstone", "grow", "wander"], config)).toEqual(["sunstone", "grow", "meadow", "wander"]);
-    expect(cardOrder(["wander", "meadow"], config)).toEqual(["meadow", "wander"]);
+    // "later" stands for an example with no web.json entry yet.
+    expect(cardOrder(["meadow", "sunstone", "later", "grow", "wander"], config)).toEqual(["sunstone", "grow", "wander", "meadow", "later"]);
+    expect(cardOrder(["later", "meadow"], config)).toEqual(["meadow", "later"]);
   });
 
   test("every example resolves against web-app", () => {
