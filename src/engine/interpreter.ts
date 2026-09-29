@@ -23,6 +23,7 @@
 // its self switch, which changes its active page.
 
 import { keyedRecord } from "./clone.ts";
+import { DEFAULT_PLAYER_NAME, substituteLines, substitutePlayerName } from "./player-name.ts";
 import type {
   Command,
   CommonEvent,
@@ -92,6 +93,9 @@ export interface SwitchState {
   items: Record<string, number>;
   variables: Record<string, number>;
   gold: number;
+  /** The player's name, substituted for the {name} text token. Part of the
+   *  save snapshot; a fresh session seeds it from Project.playerName. */
+  playerName: string;
   /** Mulberry32 cursor. Part of the save snapshot (R2 §3.1). */
   rng: number;
 }
@@ -103,6 +107,7 @@ export function createSwitchState(init?: Partial<SwitchState>): SwitchState {
     items: keyedRecord(init?.items),
     variables: keyedRecord(init?.variables),
     gold: init?.gold ?? 0,
+    playerName: init?.playerName ?? DEFAULT_PLAYER_NAME,
     rng: init?.rng ?? 0x12345678,
   };
 }
@@ -652,6 +657,7 @@ export function cloneInterp(s0: InterpState): InterpState {
       items: keyedRecord(s0.sw.items),
       variables: keyedRecord(s0.sw.variables),
       gold: s0.sw.gold,
+      playerName: s0.sw.playerName ?? DEFAULT_PLAYER_NAME,
       rng: s0.sw.rng,
     },
     main,
@@ -958,7 +964,8 @@ function runFiber(
       // reveal clock starts on the install frame, not the wait frame, or a
       // queued parallel line would dump its whole text at once (review C09).
       if (!s.modal) f.since = s.frame;
-      const joined = ins.lines.join("\n");
+      const shownLines = substituteLines(ins.lines, s.sw.playerName ?? DEFAULT_PLAYER_NAME);
+      const joined = shownLines.join("\n");
       // Once a confirm has skipped the typewriter (or it finished naturally)
       // the box stays full: elapsed-time reveal must not shrink it again.
       const wasComplete = s.modal?.kind === "text" && s.modal.complete;
@@ -972,7 +979,7 @@ function runFiber(
         s.modal = {
           kind: "text",
           fiber: f.key,
-          lines: ins.lines,
+          lines: shownLines,
           total: joined.length,
           revealed: complete ? joined.length : timed,
           complete,
@@ -991,11 +998,12 @@ function runFiber(
       // First frame after opening installs the modal; later frames keep the
       // player's cursor index.
       if (!s.modal || s.modal.kind !== "choices") {
+        const name = s.sw.playerName ?? DEFAULT_PLAYER_NAME;
         s.modal = {
           kind: "choices",
           fiber: f.key,
-          prompt: ins.prompt,
-          options: ins.texts,
+          prompt: substitutePlayerName(ins.prompt, name),
+          options: ins.texts.map((text) => substitutePlayerName(text, name)),
           index: 0,
           cancellable: ins.cancel !== null,
         };
@@ -1096,11 +1104,12 @@ function runFiber(
         if (s.modal) return;
         f.mode = "text";
         f.since = s.frame;
+        const firstLines = substituteLines(ins.lines, s.sw.playerName ?? DEFAULT_PLAYER_NAME);
         s.modal = {
           kind: "text",
           fiber: f.key,
-          lines: ins.lines,
-          total: ins.lines.join("\n").length,
+          lines: firstLines,
+          total: firstLines.join("\n").length,
           revealed: 0,
           complete: false,
         };
@@ -1112,8 +1121,8 @@ function runFiber(
         s.modal = {
           kind: "choices",
           fiber: f.key,
-          prompt: ins.prompt,
-          options: ins.texts,
+          prompt: substitutePlayerName(ins.prompt, s.sw.playerName ?? DEFAULT_PLAYER_NAME),
+          options: ins.texts.map((text) => substitutePlayerName(text, s.sw.playerName ?? DEFAULT_PLAYER_NAME)),
           index: 0,
           cancellable: ins.cancel !== null,
         };

@@ -192,6 +192,10 @@ export interface Project {
   tileSize: 16;
   start: { map: string; x: number; y: number; dir: Dir };
   initialGold?: number;
+  /** Default name substituted for the {name} text token in a fresh
+   *  playthrough. Stored in the switch bank after that, so a rename (a future
+   *  op) survives saves and transfers. */
+  playerName?: string;
   sheets: Sheet[];
   items: Item[];
   /** Page.sprite key -> static character image. */

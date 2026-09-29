@@ -380,6 +380,14 @@ function validateSwitchState(v: unknown, path: string): string | null {
   }
   if (!isFiniteNumber(v.gold)) return fail(`${path}.gold`, "finite number required");
   if (!isU32(v.rng)) return fail(`${path}.rng`, "u32 RNG cursor required");
+  // The player name is present in every snapshot a current runtime writes;
+  // an older bank without it is allowed and defaults at load, but a present
+  // value must be a non-empty, bounded string.
+  if (v.playerName !== undefined) {
+    if (typeof v.playerName !== "string" || v.playerName.length < 1 || v.playerName.length > 24) {
+      return fail(`${path}.playerName`, "string of length 1..24 required");
+    }
+  }
   return null;
 }
 

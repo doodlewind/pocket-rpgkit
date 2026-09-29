@@ -13,6 +13,7 @@
     "tileSize": { "type": "integer", "enum": [16] },
     "start": { "$ref": "#/$defs/transferTarget" },
     "initialGold": { "type": "integer", "minimum": 0 },
+    "playerName": { "type": "string", "minLength": 1, "maxLength": 24, "description": "Default name substituted for the {name} text token in a new playthrough." },
     "sheets": {
       "type": "array",
       "minItems": 1,

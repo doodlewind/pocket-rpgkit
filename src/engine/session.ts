@@ -173,9 +173,11 @@ export function startSession(
     };
   }
   // Fresh playthrough: seed the project's starting gold (the remaining
-  // switch/item/variable banks begin empty).
+  // switch/item/variable banks begin empty) and the configurable default
+  // player name (substituted for the {name} text token).
   const interp = createInterpState();
   interp.sw.gold = project.initialGold ?? 0;
+  if (project.playerName) interp.sw.playerName = project.playerName;
   return {
     frame: 0,
     mapId: start.map,
