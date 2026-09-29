@@ -45,6 +45,14 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
     "title": { "type": "string", "minLength": 1, "maxLength": 80 },
     "tileSize": { "type": "integer", "enum": [16] },
     "start": { "$ref": "#/$defs/transferTarget" },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Project-wide runtime options. Every field is optional; an absent field keeps the v1 behavior.",
+      "properties": {
+        "messageBlocksPlayer": { "type": "boolean", "description": "While any fiber's text or choices box is open (a parallel page's included), the player cannot move and no action or playerTouch page starts; autorun and parallel pages keep running. Default false." }
+      }
+    },
     "initialGold": { "type": "integer", "minimum": 0 },
     "playerName": { "type": "string", "minLength": 1, "maxLength": 24, "description": "Default name substituted for the {name} text token in a new playthrough." },
     "sheets": {

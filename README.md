@@ -319,6 +319,17 @@ initial facing. Conditions compile to forward jumps; no command can
 express a loop, and the runtime backstops a hand-crafted cyclic program
 with a fatal interpreter error instead of hanging the frame loop.
 
+Only `blocks: true` pages have a body: a body stops the player and moving
+characters alike (characters also never step onto the player), and path
+searches avoid bodies only, so a sprite-less marker (a transfer mat) is
+walked over by everyone. By default
+a blocking fiber or a choices box holds the player, while a parallel
+page's text line does not; a project that sets
+`"system": { "messageBlocksPlayer": true }` makes any open text or choices
+box hold the player (no movement, no `action` / `playerTouch` start) while
+`autorun` and `parallel` pages keep running — RPG Maker's and Tuxemon's
+dialog behavior.
+
 ## Using it in your own project
 
 The published package exports the engine surface (`pocket-rpgkit`), the

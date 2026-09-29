@@ -198,6 +198,87 @@ describe("P1④ chars — collision and exclusion", () => {
     expect([chars.chars["a"]!.tx, chars.chars["a"]!.ty]).toEqual([4, 5]);
     expect([chars.chars["b"]!.tx, chars.chars["b"]!.ty]).toEqual([5, 5]);
   });
+
+  test("a character walks over a blocks:false event; a blocks:true body still stops it", () => {
+    // Row 5: a patrol heading right from (2,5) crosses a sprite-less marker
+    // (blocks:false, the player walks over it too) at (3,5) and stops
+    // against the blocking NPC at (6,5).
+    const map = makeMap([
+      ev("walker", 2, 5, { moveRoute: route(["moveRight"], true) }),
+      ev("marker", 3, 5, { blocks: false, sprite: null }),
+      ev("wall", 6, 5),
+    ]);
+    const end = run(map, synced(map), STEP * 8, { tx: 0, ty: 0, destX: 0, destY: 0 });
+    expect([end.chars["walker"]!.tx, end.chars["walker"]!.ty]).toEqual([5, 5]);
+    expect([end.chars["marker"]!.tx, end.chars["marker"]!.ty]).toEqual([3, 5]);
+    expect([end.chars["wall"]!.tx, end.chars["wall"]!.ty]).toEqual([6, 5]);
+  });
+
+  test("a waited non-skippable route through a blocks:false event lands and releases its waiter", () => {
+    // A cutscene walks an NPC north over a sprite-less transfer marker. A
+    // non-skippable route blocked by the marker would retry forever and
+    // hold its waiting fiber (and any input lock) for good.
+    const map = makeMap([
+      ev("kyle", 4, 4),
+      ev("portal", 4, 3, { trigger: "playerTouch", blocks: false, sprite: null }),
+    ]);
+    const table = buildPassage(map, new Map([["s", SHEET]]));
+    let chars = installRoute(synced(map), "kyle", route(["moveUp", "moveUp"]), "m/scene", CFG).state;
+    let finished: string[] = [];
+    for (let i = 0; i < STEP * 3; i++) {
+      const r = stepChars(chars, table, { tx: 0, ty: 0, destX: 0, destY: 0 }, CFG, new Set(), {} as never);
+      chars = r.state;
+      finished = finished.concat(r.finishedWaiters);
+    }
+    expect([chars.chars["kyle"]!.tx, chars.chars["kyle"]!.ty]).toEqual([4, 2]);
+    expect(finished).toEqual(["m/scene"]);
+  });
+
+  test("a pathTo search crosses a blocks:false event in a one-tile corridor", () => {
+    // Row 1 is the only open row; the marker at (3,1) sits in it.
+    const blocked: [number, "block"][] = [];
+    for (let x = 0; x < 7; x++) blocked.push([x, "block"], [14 + x, "block"]);
+    const map: MapDef = {
+      ...makeMap([
+        ev("walker", 0, 1),
+        ev("marker", 3, 1, { blocks: false, sprite: null }),
+      ], 7, 3),
+      passage: blocked,
+    };
+    const table = buildPassage(map, new Map([["s", SHEET]]));
+    const walk: MoveRoute = { steps: [{ pathTo: { x: 6, y: 1, retries: 0 } }], repeat: false, skippable: false };
+    let chars = installRoute(synced(map), "walker", walk, "m/scene", CFG).state;
+    let finished: string[] = [];
+    for (let i = 0; i < STEP * 8; i++) {
+      const r = stepChars(chars, table, { tx: 0, ty: 0, destX: 0, destY: 0 }, CFG, new Set(), {} as never);
+      chars = r.state;
+      finished = finished.concat(r.finishedWaiters);
+    }
+    expect([chars.chars["walker"]!.tx, chars.chars["walker"]!.ty]).toEqual([6, 1]);
+    expect(finished).toEqual(["m/scene"]);
+  });
+
+  test("a blocks:true body in the same corridor still stops the search", () => {
+    const blocked: [number, "block"][] = [];
+    for (let x = 0; x < 7; x++) blocked.push([x, "block"], [14 + x, "block"]);
+    const map: MapDef = {
+      ...makeMap([ev("walker", 0, 1), ev("guard", 3, 1)], 7, 3),
+      passage: blocked,
+    };
+    const table = buildPassage(map, new Map([["s", SHEET]]));
+    const walk: MoveRoute = { steps: [{ pathTo: { x: 6, y: 1, retries: 0 } }], repeat: false, skippable: false };
+    let chars = installRoute(synced(map), "walker", walk, "m/scene", CFG).state;
+    let finished: string[] = [];
+    for (let i = 0; i < STEP * 8; i++) {
+      const r = stepChars(chars, table, { tx: 0, ty: 0, destX: 0, destY: 0 }, CFG, new Set(), {} as never);
+      chars = r.state;
+      finished = finished.concat(r.finishedWaiters);
+    }
+    // No path while the guard stands in the corridor: the retry budget
+    // (0) runs out and the route ends where it started.
+    expect([chars.chars["walker"]!.tx, chars.chars["walker"]!.ty]).toEqual([0, 1]);
+    expect(finished).toEqual(["m/scene"]);
+  });
 });
 
 describe("P1④ chars — forced routes and waiters", () => {

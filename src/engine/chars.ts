@@ -22,9 +22,10 @@
 //
 // Collision is decided per tile BEFORE a step and combines the cooked
 // PassageTable with character occupancy: a character never enters a tile
-// the player occupies (or is stepping into) and never enters another
-// character's tile. Only characters whose page sets blocks:true keep the
-// player out — a below-character sign is walked over.
+// the player occupies (or is stepping into). Only characters whose page
+// sets blocks:true have a body: they keep the player AND other characters
+// out, while a below-character sign or a sprite-less blocks:false marker
+// is walked over by both.
 //
 // A character whose event owns the running blocking fiber is `locked`:
 // it freezes for the interaction (MV Game_Event lock). PARALLEL fibers do
@@ -406,7 +407,10 @@ function occupantBlocks(
   if (tx === player.tx && ty === player.ty) return true;
   if (tx === player.destX && ty === player.destY) return true;
   for (const [id, o] of others) {
-    if (id === ch.id) continue;
+    // Only a body stops a character, the rule the player mover follows
+    // (tableWithBodies): a blocks:false page — a sprite-less trigger
+    // marker, a sign drawn below characters — is walked over.
+    if (id === ch.id || !o.blocks) continue;
     if (tx === o.tx && ty === o.ty) return true;
     if (o.moving && tx === o.tx + DX[o.stepDir] && ty === o.ty + DY[o.stepDir]) return true;
   }
@@ -645,7 +649,7 @@ function stepPath(
     blocked.add(player.tx + player.ty * W);
     blocked.add(player.destX + player.destY * W);
     for (const [id, o] of others) {
-      if (id === ch.id) continue;
+      if (id === ch.id || !o.blocks) continue;
       blocked.add(o.tx + o.ty * W);
       if (o.moving) blocked.add(o.tx + DX[o.stepDir] + (o.ty + DY[o.stepDir]) * W);
     }

@@ -12,6 +12,8 @@
 //                UI freezes its camera) and no new blocking trigger starts.
 //   parallels  — PARALLEL pages run concurrently in their own fibers, in
 //                ascending event-key order so each frame is deterministic.
+//                Under Project.system.messageBlocksPlayer a box a parallel
+//                opens holds the player too (messageHoldsPlayer).
 //
 // A fiber runs a compiled linear program (compile()): `if/else` becomes
 // IF + JMP, a chosen choices branch or a common event pushes another program
@@ -506,6 +508,14 @@ export interface World {
   eventsById?: ReadonlyMap<string, GameEvent>;
   cellEvents?: ReadonlyMap<number, readonly GameEvent[]>;
   alwaysScanEvents?: readonly GameEvent[];
+  /** Project.system.messageBlocksPlayer: an open box of any fiber holds
+   *  the player (messageHoldsPlayer). */
+  messageBlocksPlayer?: boolean;
+}
+
+/** Project-wide options a World is compiled with (Project.system). */
+export interface WorldOptions {
+  messageBlocksPlayer?: boolean;
 }
 
 export interface InterpError {
@@ -575,7 +585,12 @@ export function createInterpState(sw: SwitchState = createSwitchState()): Interp
   };
 }
 
-export function createWorld(map: MapDef, common: CommonEvent[] = [], hz: number = TICK_HZ): World {
+export function createWorld(
+  map: MapDef,
+  common: CommonEvent[] = [],
+  hz: number = TICK_HZ,
+  options: WorldOptions = {},
+): World {
   const commonPrograms = new Map<string, Prog>();
   for (const event of common) commonPrograms.set(event.id, compile(event.commands, hz));
   const pagePrograms = new Map<string, readonly Prog[]>();
@@ -606,13 +621,33 @@ export function createWorld(map: MapDef, common: CommonEvent[] = [], hz: number 
       }
     }
   }
-  return { hz, map, commonPrograms, pagePrograms, eventsById, cellEvents, alwaysScanEvents };
+  return {
+    hz,
+    map,
+    commonPrograms,
+    pagePrograms,
+    eventsById,
+    cellEvents,
+    alwaysScanEvents,
+    messageBlocksPlayer: options.messageBlocksPlayer === true,
+  };
 }
 
 /** True while the blocking interpreter owns the session: player movement
  *  and free-scroll input freeze (a text/choices/wait/autorun fiber). */
 export function isBusy(_s: InterpState): boolean {
   return _s.main !== null;
+}
+
+/** True while an open text or choices box holds the player: the project
+ *  set system.messageBlocksPlayer and a box is open, whichever fiber owns
+ *  it — a PARALLEL page's included. The mover then ignores the d-pad and
+ *  no action / playerTouch page starts, so the confirm that advances the
+ *  box never also starts the faced event; autorun and parallel pages keep
+ *  running. Without the option only a blocking fiber (isBusy) or a
+ *  choices box holds the player (v1). */
+export function messageHoldsPlayer(w: World, s: InterpState): boolean {
+  return w.messageBlocksPlayer === true && s.modal !== null;
 }
 
 /** Deep-copy interpreter state without host built-ins. The desktop guest
@@ -812,6 +847,9 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
   const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
   const prevFacing = input.prevFacing ?? input.facing;
   const turned = prevFacing !== input.facing;
+  // Sampled once, before any fiber folds this step: the box that is open
+  // when the confirm edge arrives is the one the press belongs to.
+  const held = messageHoldsPlayer(w, s);
   // Release touch latches. A latch only blocks a re-fire while the player
   // stands on the SAME cell: stepping to another cell releases it even when
   // that cell is still inside the area (every step into an area cell
@@ -853,8 +891,8 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
     } else if (page.trigger === "action") {
       // While the cross-event input lock is held, confirm presses
       // start no event (the cutscene owns control); autorun/parallel above
-      // still run.
-      if (s.inputLocked || !input.confirmEdge) continue;
+      // still run. A box holding the player owns the press the same way.
+      if (s.inputLocked || held || !input.confirmEdge) continue;
       // MV parity: action button starts the event one tile in FRONT of the
       // player (NPCs block the tile; below-character signs are faced, not
       // stood on) OR sharing the player's cell (a plate the player walked
@@ -868,6 +906,7 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
         s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
       }
     } else if (page.trigger === "playerTouch") {
+      if (held) continue;
       const r = rectOf(ev);
       if (!r || !cellInRect(input.playerCell, r)) continue;
       // Entry/step edge: moved onto an unlatched area cell.

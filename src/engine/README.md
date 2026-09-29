@@ -25,7 +25,8 @@ state.
   (the v1 15 plus `lockInput` / `unlockInput` / `place`), the typewriter
   clock, the seeded RNG, saveable switch state.
 - `chars.ts` — per-map character motion: page patrol routes, autonomous
-  random/approach, command-forced routes, mutual exclusion.
+  random/approach, command-forced routes, body collision (only
+  `blocks: true` pages stop a character, as they stop the player).
 - `session.ts` — the multi-map fold: transfer (map swap + fade) and
   moveRoute completion across the mover / characters / interpreter.
 - `clone.ts` — host-portable deep copy (the desktop QuickJS realm has no
@@ -49,17 +50,20 @@ The interpreter does not move the player. The host owns a mover (P1②'s
 
 ```ts
 import {
-  createWorld, createInterpState, stepInterp, isBusy,
+  createWorld, createInterpState, stepInterp, isBusy, messageHoldsPlayer,
   continueExternal, type InterpInput, type World, type InterpState,
 } from "./interpreter.ts";
 
-const world: World = createWorld(map, project.commonEvents ?? [], hz);
+const world: World = createWorld(map, project.commonEvents ?? [], hz, {
+  messageBlocksPlayer: project.system?.messageBlocksPlayer,
+});
 let interp = createInterpState();
 
 // each virtual frame, AFTER the mover has run:
-if (!isBusy(interp)) {
+if (!isBusy(interp) && !messageHoldsPlayer(world, interp)) {
   // mover runs only while no blocking fiber owns the session (an open
-  // dialog, a choices box, a wait, an autorun).
+  // dialog, a choices box, a wait, an autorun) and, when the project opts
+  // in, no parallel page's box is open either.
   movement = stepMovement(movement, buttons, passageTable);
 }
 const input: InterpInput = {
@@ -107,9 +111,17 @@ Conventions:
   while held the mover ignores the d-pad and confirm starts no action
   event, but `autorun`/`parallel` fibers still fold. The lock is per map
   visit and its held state round-trips through a save.
+- **Message hold:** `createWorld(..., { messageBlocksPlayer: true })`
+  (from `project.system.messageBlocksPlayer`) makes any open text/choices
+  box hold the player, a PARALLEL page's included:
+  `messageHoldsPlayer(world, state)` is then true, the mover must not run,
+  and the trigger scan starts no action or playerTouch page, so the
+  confirm that advances the box never also starts the faced event.
+  `autorun`/`parallel` pages keep running. Off by default (v1).
 - `isBusy(state)` is true while a blocking (action / playerTouch / autorun)
   fiber runs. The mover freezes for its whole duration. PARALLEL pages run
-  concurrently and never set busy.
+  concurrently and never set busy (only the message hold above can make
+  their box hold the player).
 - Edges are one frame wide: the host computes `pressed = buttons & ~prev`
   for CIRCLE (confirm), CROSS (cancel), UP and DOWN and passes booleans.
 - `state.cues` lists sound effects emitted by commands on the latest step;
@@ -136,8 +148,10 @@ state = stepSession(session, state, {          // once per virtual frame
 
 1. **characters.syncPages** — reconcile NPCs with active pages; a page
    switch aborts a forced route and resumes its parked waiter.
-2. **mover** — frozen while a blocking fiber runs or the player's own
-   command route is driving; collision adds blocking character bodies.
+2. **mover** — frozen while a blocking fiber runs, a choices box is
+   open, the input lock is held, the message hold applies, or the
+   player's own command route is driving; collision adds blocking
+   (`blocks: true`) character bodies.
 3. **characters.stepChars** — patrol / random / approach / forced motion.
 4. **interpreter.stepInterp** — fed the live NPC cells for trigger scans.
 5. **external requests** — a `transfer` swaps map/fresh-interp/characters

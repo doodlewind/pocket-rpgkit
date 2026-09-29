@@ -263,3 +263,20 @@ describe("sharded map repository", () => {
     expect(() => createSession(split.shell, 60, checksumRepository)).toThrow(/checksum mismatch/);
   });
 });
+
+describe("sharded maps keep project system options", () => {
+  test("worlds compiled on demand carry system.messageBlocksPlayer", () => {
+    const project = { ...fixture(), system: { messageBlocksPlayer: true } };
+    const inline = createSession(project, 60);
+    expect([...inline.worlds.values()].every((w) => w.messageBlocksPlayer === true)).toBe(true);
+    const { session, split } = trackingSession(project);
+    let state = startSession(split.shell, session);
+    expect(session.worlds.get("map_00")!.messageBlocksPlayer).toBe(true);
+    state = pulse(session, state);
+    for (let i = 0; i < 40 && state.mapId === "map_00"; i++) {
+      state = stepSession(session, state, { buttons: 0 });
+    }
+    expect(state.mapId).toBe("map_01");
+    expect(session.worlds.get("map_01")!.messageBlocksPlayer).toBe(true);
+  });
+});

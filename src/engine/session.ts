@@ -40,12 +40,14 @@ import {
   createInterpState,
   createWorld,
   isBusy,
+  messageHoldsPlayer,
   randInt,
   stepInterp,
   type InterpInput,
   type InterpState,
   type PendingMoveRoute,
   type SwitchState,
+  type WorldOptions,
 } from "./interpreter.ts";
 import {
   charCell,
@@ -172,6 +174,8 @@ export interface Session {
   repository: MapRepository | null;
   sheets: ReadonlyMap<string, Sheet>;
   commonEvents: CommonEvent[];
+  /** Project.system options every compiled world (eager or on demand) uses. */
+  worldOptions: WorldOptions;
 }
 
 /** Acquire, validate and compile one map into the derived session cache. */
@@ -193,7 +197,7 @@ export function acquireSessionMap(sess: Session, id: string): MapDef {
   }
   // Compile into locals first. A throw leaves the live cache and simulation
   // untouched, which is what an async caller needs before retrying a frame.
-  const world = createWorld(map, sess.commonEvents, MOTION_HZ);
+  const world = createWorld(map, sess.commonEvents, MOTION_HZ, sess.worldOptions);
   const table = buildPassage(map, sess.sheets);
   sess.maps.set(id, map);
   sess.worlds.set(id, world);
@@ -231,6 +235,9 @@ export function createSession(
 ): Session {
   const sheets = new Map<string, Sheet>(project.sheets.map((s) => [s.id, s]));
   const commonEvents = [...(project.commonEvents ?? [])];
+  const worldOptions: WorldOptions = {
+    messageBlocksPlayer: project.system?.messageBlocksPlayer === true,
+  };
   if (isProjectShell(project)) {
     if (!maps) throw new Error("map repository: ProjectShell requires a MapRepository");
     const index = validateMapIndex(project.mapIndex);
@@ -256,6 +263,7 @@ export function createSession(
       repository: maps,
       sheets,
       commonEvents,
+      worldOptions,
     };
     acquireSessionMap(session, project.start.map);
     releaseSessionMapsExcept(session, [project.start.map]);
@@ -267,7 +275,7 @@ export function createSession(
   // folds MOTION_HZ/hz of them per host frame. Authored time then means the
   // same virtual time at every host rate.
   const worlds = new Map(
-    project.maps.map((m) => [m.id, createWorld(m, commonEvents, MOTION_HZ)]),
+    project.maps.map((m) => [m.id, createWorld(m, commonEvents, MOTION_HZ, worldOptions)]),
   );
   const tables = new Map(project.maps.map((m) => [m.id, buildPassage(m, sheets)]));
   return {
@@ -282,6 +290,7 @@ export function createSession(
     repository: null,
     sheets,
     commonEvents,
+    worldOptions,
   };
 }
 
@@ -507,11 +516,14 @@ function stepReferenceTick(
   //    route is driving, a choices box (including one owned by a PARALLEL
   //    page) is open capturing the d-pad, or the cross-event input lock is
   //    held. A parallel TEXT line does not freeze the world
-  //    (review C10).
+  //    (review C10) unless the project opts in with
+  //    system.messageBlocksPlayer: then any open box holds the player.
+  const world = sess.worlds.get(s.mapId)!;
   const prevFacing = s.move.facing;
   const busy = isBusy(s.interp);
   const choicesOpen = s.interp.modal?.kind === "choices";
-  if (!busy && !choicesOpen && s.playerRoute === null && !s.interp.inputLocked) {
+  const held = messageHoldsPlayer(world, s.interp);
+  if (!busy && !choicesOpen && !held && s.playerRoute === null && !s.interp.inputLocked) {
     const table = tableWithBodies(sess.tables.get(s.mapId)!, s.chars);
     Object.assign(s.move, stepMovement(s.move, input.buttons, table, sess.cfg));
   }
@@ -560,7 +572,7 @@ function stepReferenceTick(
     prevFacing,
     eventCells,
   };
-  s.interp = stepInterp(sess.worlds.get(s.mapId)!, s.interp, interpInput);
+  s.interp = stepInterp(world, s.interp, interpInput);
   // stepInterp clones the mutable interpreter state, so the switch bank it
   // returns is a new object; re-alias the session's top-level bank to it so
   // the values chars/motion read next tick are the ones commands just wrote.
@@ -924,16 +936,11 @@ function stepPlayerPath(
       r.pathRetriesLeft =
         ("pathTo" in step ? step.pathTo.retries : step.approach.retries) ?? DEFAULT_PATH_RETRIES;
     }
-    // Route around every live character body, including below-character
-    // (blocks:false) events, the way a character route excludes `others`.
-    // The stamped table already contributes blocks:true terrain opinions.
-    const cells = new Set<number>();
-    for (const o of Object.values(s.chars.chars)) {
-      cells.add(o.ty * table.width + o.tx);
-      if (o.moving) cells.add((o.ty + DY[o.stepDir]) * table.width + (o.tx + DX[o.stepDir]));
-    }
+    // The stamped table already carries every blocks:true body (and the
+    // cell it is stepping into). A blocks:false event is walked over by the
+    // mover, so the search crosses it too, the way a character route does.
     // Begin a frame-split BFS (one slice per reference tick).
-    const search = createPathSearch(table, m.tx, m.ty, gx, gy, cells);
+    const search = createPathSearch(table, m.tx, m.ty, gx, gy);
     if (search === null) { endPlayerRoute(s); return; }
     r.plan = { search, dirs: [], blockedTicks: 0, done: false, approach };
   }

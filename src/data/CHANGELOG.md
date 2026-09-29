@@ -122,5 +122,28 @@ fields and commands are optional and the v1 spellings keep their meaning.
   The UI pauses and retries the same input frame after preparation, so network
   timing cannot alter the simulation timeline.
 
+## v1 amendment — 2026-09-29 (message hold, character bodies)
+
+- **Message hold (optional):** a project may carry
+  `system: { messageBlocksPlayer: true }`. While any text or choices box
+  is open — including one a `parallel` page shows — the player cannot move
+  and no `action` or `playerTouch` page starts, so the confirm press that
+  advances the box never also starts the faced event. `autorun` and
+  `parallel` pages keep running. The option defaults to `false`, and a
+  document without it behaves exactly as before: only a blocking
+  (`action` / `playerTouch` / `autorun`) fiber or a choices box holds the
+  player, and a parallel page's text line does not.
+- **Character bodies follow `blocks`:** a moving character (page
+  `moveRoute`, `random` / `approach` motion, a `moveRoute` command, and the
+  `pathTo` / `approach` searches) is now stopped only by pages with
+  `blocks: true` (and by the player), the rule the player's own movement
+  already followed. Before, every event with an active page stopped a
+  character, so a sprite-less `blocks: false` marker such as a transfer mat
+  could hold a non-skippable cutscene route forever. The player's own
+  `pathTo` / `approach` search no longer routes around `blocks: false`
+  events either. A document that relied on a `blocks: false` event to stop
+  a character must give that page `blocks: true`. This repository's
+  examples and goldens are unchanged.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

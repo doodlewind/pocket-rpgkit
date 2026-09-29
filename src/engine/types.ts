@@ -257,11 +257,25 @@ export type WalkerSpriteDef = WalkerSheetSpriteDef | WalkerAtlasSpriteDef;
  *  the cooker slices into per-facing/pose frames. */
 export type SpriteDef = ImageSpriteDef | WalkerSpriteDef;
 
+/** Project-wide runtime options (RPG Maker's System settings). Every field
+ *  is optional and its absence keeps the v1 behavior. */
+export interface ProjectSystem {
+  /** While ANY fiber's text or choices box is open — a parallel page's
+   *  included — the player cannot move and no action or playerTouch page
+   *  starts, so the confirm that advances the box never also talks to the
+   *  faced event (MV $gameMessage.isBusy, Tuxemon's dialog state swallows
+   *  input). autorun and parallel pages keep running. Default false: v1
+   *  holds the player only for a blocking fiber or a choices box. */
+  messageBlocksPlayer?: boolean;
+}
+
 export interface Project {
   format: "rpgkit-project/v1";
   title: string;
   tileSize: 16;
   start: { map: string; x: number; y: number; dir: Dir };
+  /** Runtime options; see ProjectSystem. */
+  system?: ProjectSystem;
   initialGold?: number;
   /** Default name substituted for the {name} text token in a fresh
    *  playthrough. Stored in the switch bank after that, so a rename (a future

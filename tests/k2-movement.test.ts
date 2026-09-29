@@ -15,6 +15,7 @@ import {
   type Session,
   type SessionState,
 } from "../src/engine/session.ts";
+import { createSwitchState } from "../src/engine/interpreter.ts";
 import { MOTION_HZ } from "../src/engine/motion-clock.ts";
 import { validateSchema, type VError } from "../src/engine/schema-validate.ts";
 import type {
@@ -256,7 +257,8 @@ describe("K2/T2-5 — pathTo deterministic BFS", () => {
 
   test("an occupied corridor is replanned after its blocker moves away", () => {
     const walker = staticNpc("walker", 1, 1);
-    const blocker = staticNpc("blocker", 2, 1);
+    // Only a body (blocks:true) holds the corridor against the walker.
+    const blocker = staticNpc("blocker", 2, 1, "down", true);
     const scene = cutscene("scene", [
       {
         op: "moveRoute",
@@ -313,6 +315,75 @@ describe("K2/T2-5 — approach", () => {
     const c = s.chars.chars.npc!;
     expect({ tx: c.tx, ty: c.ty }).toEqual({ tx: 5, ty: 4 });
     expect(c.facing).toBe(0); // faces down at the anchor
+  });
+});
+
+describe("character collision follows blocks, like the player's", () => {
+  /** A cutscene that holds the input lock around one waited, non-skippable
+   *  route: if the route can never land, the lock is never released. */
+  const lockedWalk = (target: string, steps: MoveStep[]): GameEvent => cutscene("scene", [
+    { op: "lockInput" },
+    { op: "moveRoute", target: { event: target }, wait: true, route: { steps, repeat: false, skippable: false } },
+    { op: "unlockInput" },
+  ]);
+
+  test("a locked cutscene walks an NPC across a sprite-less transfer marker and unlocks", () => {
+    const kyle = staticNpc("kyle", 4, 4, "up", true);
+    const portal = ge("portal", 4, 3, [pg("playerTouch", [{ op: "transfer", map: "b", x: 1, y: 1 }])]);
+    const p = project(
+      [smap("a", 8, 8, [kyle, portal, lockedWalk("kyle", ["moveUp", "moveUp"])]), smap("b", 4, 4, [])],
+      { map: "a", x: 1, y: 6, dir: "up" },
+    );
+    const sess = createSession(p, MOTION_HZ);
+    const s = awaitDone(sess, startSession(p, sess), "a", "scene");
+    expect(s.chars.chars.kyle!).toMatchObject({ tx: 4, ty: 2, moving: false });
+    expect(s.interp.inputLocked).toBe(false);
+    expect(s.mapId).toBe("a"); // an NPC on a touch marker fires nothing
+  });
+
+  test("an unspawned NPC slot (blocks:false page) is crossed; its spawned body is not", () => {
+    // The slot's page 0 is an empty placeholder; page 1 (switch "arrived")
+    // is the NPC with a body.
+    const slot = ge("aeble", 4, 3, [
+      pg("action", []),
+      pg("action", [], { condition: { switch: "arrived" }, sprite: "a", blocks: true }),
+    ]);
+    const build = (): Project => project(
+      [smap("a", 8, 8, [staticNpc("kyle", 4, 4, "up", true), slot, lockedWalk("kyle", ["moveUp"])])],
+      { map: "a", x: 1, y: 6, dir: "up" },
+    );
+    const p = build();
+    const sess = createSession(p, MOTION_HZ);
+    const crossed = awaitDone(sess, startSession(p, sess), "a", "scene");
+    expect(crossed.chars.chars.kyle!).toMatchObject({ tx: 4, ty: 3 });
+    expect(crossed.interp.inputLocked).toBe(false);
+
+    // With the NPC present its body keeps holding the cell: the same
+    // non-skippable step waits instead of walking into it.
+    const p2 = build();
+    const sess2 = createSession(p2, MOTION_HZ);
+    let s = startSession(p2, sess2, createSwitchState({ switches: { arrived: true } }));
+    s = fold(sess2, s, 120);
+    expect(s.chars.chars.kyle!).toMatchObject({ tx: 4, ty: 4 });
+    expect(s.sw.self["a/scene"]).toBeUndefined();
+    expect(s.interp.inputLocked).toBe(true);
+  });
+
+  test("a waited player pathTo crosses a blocks:false marker in a one-tile corridor", () => {
+    // Row 1 is the only open row; the marker at (3,1) sits in it.
+    const blocked: [number, "block"][] = [];
+    for (let x = 0; x < 7; x++) blocked.push([x, "block"], [14 + x, "block"]);
+    const marker = ge("marker", 3, 1, [pg("playerTouch", [{ op: "switch", id: "stepped", value: true }])]);
+    const scene = cutscene("scene", [{
+      op: "moveRoute",
+      target: "player",
+      wait: true,
+      route: { steps: [{ pathTo: { x: 6, y: 1, retries: 0 } }], repeat: false, skippable: false },
+    }]);
+    const p = project([smap("a", 7, 3, [marker, scene], { passage: blocked })], { map: "a", x: 0, y: 1, dir: "right" });
+    const sess = createSession(p, MOTION_HZ);
+    const s = awaitDone(sess, startSession(p, sess), "a", "scene");
+    expect(s.move).toMatchObject({ tx: 6, ty: 1, moving: false });
   });
 });
 
