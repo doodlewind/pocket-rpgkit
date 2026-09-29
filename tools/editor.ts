@@ -1,10 +1,10 @@
 // tools/editor.ts — open the tile-map editor (editor/) in a PocketJS
 // desktop host window: macos-app on a Mac, linux-app elsewhere.
 //
-//   bun run editor                          # examples/sunstone/data/sunstone.json
-//   bun run editor meadow                   # examples/meadow/data/meadow.json
-//   bun run editor sunstone --file my.json  # edit a copy; seeded from the
-//                                           # example document if missing
+//   bun run editor                          # dist/editor/sunstone.json
+//   bun run editor meadow                   # dist/editor/meadow.json
+//   bun run editor sunstone --file my.json  # edit another file; seeded from
+//                                           # the example document if missing
 //                                           # (relative to the repo root:
 //                                           # `bun run` starts scripts there)
 //   bun run editor --build-only             # bundle + release host, no window
@@ -15,6 +15,10 @@
 // editor as svc lines, sends the file's text as a {t:"load"} line at boot,
 // and writes every {t:"save"} line back to that file (tmp file + rename).
 // Build and host flags come from tools/lib/desktop.ts, like the examples.
+//
+// By default the editor works on a copy in dist/editor/, seeded from the
+// example's document: the examples build their documents from code, and
+// `bun run gen-assets` would overwrite edits made in examples/*/data/.
 
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -40,7 +44,7 @@ if (!source) {
 }
 
 const exampleDoc = join(root, source.document);
-const file = fileArg ? resolve(process.cwd(), fileArg) : exampleDoc;
+const file = fileArg ? resolve(process.cwd(), fileArg) : join(root, "dist", "editor", `${source.id}.json`);
 
 const build = await buildForDesktop(join(root, "editor", "pocket.json"));
 if (buildOnly) {
@@ -53,12 +57,5 @@ if (!existsSync(file)) {
   copyFileSync(exampleDoc, file);
   console.log(`editor: seeded ${file} from ${source.document}`);
 }
-if (file === exampleDoc) {
-  console.log(
-    `editor: SAVE writes ${relative(root, file)} in place; the example's cooker regenerates it ` +
-      `from code (\`bun run gen-assets\`), so pass --file <path> to keep edits in a copy`,
-  );
-} else {
-  console.log(`editor: SAVE writes ${file}`);
-}
+console.log(`editor: SAVE writes ${relative(root, file) || file}`);
 await runDesktopHost(build, ["--file", file, ...rest]);

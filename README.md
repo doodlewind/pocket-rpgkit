@@ -113,18 +113,18 @@ settlement is not wired in: its sheet is synthesized by its cooker rather
 than cut from a source PNG.
 
 ```sh
-bun run editor                    # Sunstone (examples/sunstone/data/sunstone.json)
-bun run editor meadow             # Meadow (examples/meadow/data/meadow.json)
-bun run editor sunstone --file my-map.json   # edit a copy (seeded if missing)
+bun run editor                    # Sunstone, on a working copy in dist/editor/
+bun run editor meadow             # Meadow
+bun run editor sunstone --file my-map.json   # another file (seeded if missing)
 bun run editor --build-only       # bundle + release host, no window
 ```
 
 The launcher builds `dist/<target>/editor.{js,pak}` and the Rust host,
 then opens the window with the `rpgkit-editor` companion and `--file`: the
 host forwards the real mouse and keyboard and writes each save to that
-file. The example games still build their projects from code, and
-`bun run gen-assets` rewrites `data/*.json` from that code, so keep edits
-you care about in a copy (`--file`). Without the companion (the wasm sim,
+file, by default a working copy in `dist/editor/` seeded from the
+example (the example games build their documents from code, and
+`bun run gen-assets` rewrites `data/*.json`). Without the companion (the wasm sim,
 a browser) the editor runs from buttons behind a visible banner.
 `bun run build:editor` builds the sim bundle alone; the editor's tests are
 `tests/editor-model.test.ts` and `tests/editor-sim.test.ts`. More in

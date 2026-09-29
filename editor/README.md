@@ -29,10 +29,10 @@ those parts of a document.
 ## Running
 
 ```sh
-bun run editor              # examples/sunstone/data/sunstone.json
-bun run editor meadow       # examples/meadow/data/meadow.json
-bun run editor sunstone --file my-map.json   # edit a copy; seeded from the
-                                             # example document if missing
+bun run editor              # dist/editor/sunstone.json, a working copy
+bun run editor meadow       # dist/editor/meadow.json
+bun run editor sunstone --file my-map.json   # edit another file; seeded from
+                                             # the example document if missing
                                              # (relative paths start at the
                                              # repository root)
 bun run editor --build-only # bundle + release host, no window
@@ -47,12 +47,15 @@ and `--file`. The host forwards the real mouse and keyboard to the editor,
 sends the file's text at boot, and writes each SAVE (header button or
 Cmd+S) back to that file through a temp file and a rename.
 
-**Saving over an example document.** The examples author their projects
-in code (`examples/sunstone/game-data.ts`, `examples/meadow/mini-project.ts`);
+**Working copies.** The examples author their projects in code
+(`examples/sunstone/game-data.ts`, `examples/meadow/mini-project.ts`);
 `data/*.json` is what their cookers emit, and the games themselves still
-build from code. `bun run gen-assets` rewrites those documents and drops
-editor changes, and `tests/editor-model.test.ts` notices a document that no
-longer matches the editor's bundled copy. To keep edits, pass `--file`.
+build from code. So by default the editor works on a copy in
+`dist/editor/`, seeded from the example document the first time. Passing
+`--file examples/sunstone/data/sunstone.json` edits the example document
+itself, but `bun run gen-assets` rewrites it from code and drops the edits,
+and `tests/editor-model.test.ts` notices a document that no longer matches
+the editor's bundled copy.
 Once the host file is open, the **DOC** button is disabled, so SAVE can
 never write a different project into it.
 
