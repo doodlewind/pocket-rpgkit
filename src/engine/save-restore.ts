@@ -25,6 +25,7 @@ import type { SaveSnapshot } from "./save.ts";
 import { SaveError, decodeEnvelopeText } from "./save.ts";
 import { cloneInterp } from "./interpreter.ts";
 import { createChars } from "./chars.ts";
+import { decodeExtension } from "./extensions.ts";
 import {
   acquireSessionMap,
   releaseSessionMapsExcept,
@@ -111,6 +112,13 @@ export function restoreSessionSnapshot(
   const problem = restoreProblem(snap, map, table);
   if (problem) throw new SaveError("shape", `save cannot be restored: ${problem}`);
   const interp = cloneInterp(snap.interp);
+  let ext;
+  try {
+    ext = decodeExtension(session.extensions, snap.ext);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SaveError("shape", `save extension state is invalid: ${reason}`);
+  }
   const state: SessionState = {
     frame: Math.floor(interp.frame / session.ticksPerFrame),
     mapId: snap.map,
@@ -120,6 +128,8 @@ export function restoreSessionSnapshot(
     interp,
     fade: null,
     playerRoute: null,
+    ext,
+    scene: null,
   };
   releaseSessionMapsExcept(session, [snap.map]);
   return state;

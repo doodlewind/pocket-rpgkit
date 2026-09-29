@@ -1,0 +1,71 @@
+// src/engine/battle.ts — generic Battle Processing contracts.
+//
+// Rules are supplied by a game. The kit owns only lifecycle: seed once from
+// the session RNG, retain the JSON battle state in SessionState.scene, route
+// input/ticks to the pure reducer, and resume the parked event branch.
+
+import { deepClone } from "./clone.ts";
+import { assertJsonValue } from "./extensions.ts";
+import type { Dir, JsonValue, VariableValue } from "./types.ts";
+
+export interface BattleInput {
+  buttons: number;
+  confirmEdge?: boolean;
+  cancelEdge?: boolean;
+  upEdge?: boolean;
+  downEdge?: boolean;
+}
+
+export type BattleResult = "win" | "lose" | "escape" | "draw";
+
+export interface BattleTransfer {
+  map: string;
+  x: number;
+  y: number;
+  dir?: Dir | "keep";
+  /** Authored seconds, compiled against the fixed 60 Hz reference. */
+  fade?: number;
+}
+
+export interface BattleCompletion {
+  ext: JsonValue;
+  result: BattleResult;
+  writes?: Readonly<Record<string, VariableValue>>;
+  switches?: Readonly<Record<string, boolean>>;
+  transfer?: BattleTransfer;
+}
+
+export interface BattleStart {
+  state: JsonValue;
+  ext: JsonValue;
+}
+
+export interface BattleRules {
+  start(ext: JsonValue, setup: JsonValue, seed: number): BattleStart | null;
+  /** One host-frame fold. ticks is the number of fixed 60 Hz reference ticks
+   * represented by that host frame (1/2/3/15 at 60/30/20/4 Hz). */
+  step(state: JsonValue, input: Readonly<BattleInput>, ticks: number): JsonValue;
+  done(state: JsonValue): BattleCompletion | null;
+}
+
+export interface BattleScene {
+  kind: "battle";
+  fiber: string;
+  state: JsonValue;
+  /** Reference ticks for which the map world has been paused. Applied to
+   * fiber-relative clocks atomically when this scene completes. */
+  pausedTicks: number;
+}
+
+export type SceneSlot = BattleScene;
+
+export function cloneScene(scene: SceneSlot | null): SceneSlot | null {
+  if (scene === null) return null;
+  assertJsonValue(scene.state, "battle scene state");
+  return {
+    kind: "battle",
+    fiber: scene.fiber,
+    state: deepClone(scene.state),
+    pausedTicks: scene.pausedTicks ?? 0,
+  };
+}

@@ -25,7 +25,7 @@
 // the world camera commit through one precompiled jump batch; chunk images
 // stay mounted while the player walks.
 
-import { batch, createSignal, onMount, Show, type Accessor } from "solid-js";
+import { batch, createSignal, onMount, Show, type Accessor, type Component } from "solid-js";
 import { Image, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { createJumpBatch, type JumpBatch } from "@pocketjs/framework/animation";
 import { createElement, setProp } from "@pocketjs/framework/renderer";
@@ -36,6 +36,8 @@ import { BTN } from "@pocketjs/framework/input";
 import { getOps, hostViewport } from "@pocketjs/framework/host";
 import { followCamera } from "../engine/camera.ts";
 import { deepClone } from "../engine/clone.ts";
+import type { ExtensionOptions, ExtensionRuntime } from "../engine/extensions.ts";
+import { cloneScene, type BattleRules, type SceneSlot } from "../engine/battle.ts";
 import { centerOffset } from "../engine/viewport.ts";
 import {
   createSession,
@@ -45,6 +47,7 @@ import {
   stepSession,
   type Session,
   type SessionInput,
+  type SceneOptions,
   type SessionState,
 } from "../engine/session.ts";
 import { isProjectShell, MapNotReadyError } from "../engine/map-repository.ts";
@@ -57,6 +60,7 @@ import type {
   MapDef,
   MapRepository,
   ProjectSource,
+  JsonValue,
   SpriteDef,
 } from "../engine/types.ts";
 import { PlayerSprite, playerImageKey } from "./PlayerSprite.tsx";
@@ -113,8 +117,12 @@ function npcFrame(
   event: GameEvent,
   sprites: Sprites,
   npcSrc: GameAssets["npcSrc"],
+  extensions: ExtensionRuntime,
 ): NpcFrame {
-  const active = activePage(event, state.sw, state.mapId, state.move.facing);
+  const active = activePage(event, state.sw, state.mapId, state.move.facing, {
+    runtime: extensions,
+    ext: state.ext,
+  });
   const name = active?.page.sprite;
   const art: NpcArt | "" = name && spritePaints(sprites[name]) ? (npcSrc[name] ?? "") : "";
   const ch = state.chars.chars[event.id];
@@ -140,6 +148,7 @@ function CurrentMapActors(props: {
   worldWidth: number;
   sprites: Sprites;
   npcSrc: GameAssets["npcSrc"];
+  extensions: ExtensionRuntime;
   player: GameAssets["player"];
   playerHeight: 16 | 32;
   pose: Accessor<WalkPose>;
@@ -154,7 +163,7 @@ function CurrentMapActors(props: {
   const npcs: NpcRenderSlot[] = Array.from({ length: props.slotCount }, (_, index) => {
     const source = slots[index];
     const frame = source
-      ? npcFrame(initial, source, props.sprites, props.npcSrc)
+      ? npcFrame(initial, source, props.sprites, props.npcSrc, props.extensions)
       : [0, 0, "", 16] as const;
     const node = createElement("image");
     setProp(node, "style", npcStyle(frame[3], actorDepth(frame[0], frame[1], stride)));
@@ -235,7 +244,7 @@ function CurrentMapActors(props: {
     for (let index = 0; index < touched; index++) {
       const source = slots[index];
       const frame: NpcFrame = source
-        ? npcFrame(state, source, props.sprites, props.npcSrc)
+        ? npcFrame(state, source, props.sprites, props.npcSrc, props.extensions)
         : [0, 0, "", 16];
       frames.push(frame);
       const npc = npcs[index]!;
@@ -302,11 +311,30 @@ declare global {
   var __rpgGameCamera: CameraState | undefined;
 }
 
-export function GameView(props: {
+/** A game-owned scene renderer is deliberately read-only. All animation,
+ * selection and battle data must live in the supplied JSON state so replay
+ * and rewind reproduce the same pixels. */
+export interface BattleSceneViewProps {
+  state: JsonValue;
+  width: number;
+  height: number;
+}
+
+export type BattleSceneComponent = Component<BattleSceneViewProps>;
+
+export interface GameViewProps {
   project: ProjectSource;
   /** Required with ProjectShell; omitted for backwards-compatible inline
    * projects. Local repositories acquire synchronously. */
   maps?: MapRepository;
+  /** Pure game registrations forwarded to createSession(). */
+  extensions?: ExtensionOptions;
+  battle?: BattleRules;
+  /** Full-screen scenes freeze map simulation unless explicitly enabled. */
+  scene?: SceneOptions;
+  /** Full-screen renderer used while SessionState.scene is a battle. Its
+   * only inputs are reducer state and the live logical resolution. */
+  battleScene?: BattleSceneComponent;
   assets: GameAssets;
   /** One u16 button mask per 60 Hz source frame (engine/attract-tape.ts).
    *  Present: attract/takeover/rewind drive the fold. Absent: live play. */
@@ -324,8 +352,14 @@ export function GameView(props: {
   /** Browser repositories can report their frame barrier without putting
    * network timing into SessionState. null means ticking has resumed. */
   onMapLoading?: (mapId: string | null) => void;
-}) {
+}
+
+export function GameView(props: GameViewProps) {
   const { project, assets } = props;
+  if ((props.battle === undefined) !== (props.battleScene === undefined)) {
+    throw new Error("GameView: battle and battleScene must be registered together");
+  }
+  const BattleSceneView = props.battleScene;
   const stream = assets.stream;
   // The host rate selects how many fixed 60 Hz reference ticks each frame
   // folds. Time-bearing commands compile against that fixed reference.
@@ -333,9 +367,22 @@ export function GameView(props: {
   // The controller folds the published 60 Hz tape on its source timeline
   // and maps each host frame onto that timeline.
   const attract = props.attractTape
-    ? new AttractController(project, [...props.attractTape], { hz, maps: props.maps })
+    ? new AttractController(project, [...props.attractTape], {
+        hz,
+        maps: props.maps,
+        extensions: props.extensions,
+        battle: props.battle,
+        scene: props.scene,
+      })
     : null;
-  const session: Session = attract ? attract.getSession() : createSession(project, hz, props.maps);
+  const session: Session = attract
+    ? attract.getSession()
+    : createSession(project, hz, {
+        maps: props.maps,
+        extensions: props.extensions,
+        battle: props.battle,
+        scene: props.scene,
+      });
   let state: SessionState = attract ? attract.state : startSession(project, session);
   globalThis.__rpgSessionState = state;
 
@@ -375,6 +422,8 @@ export function GameView(props: {
   const [facing, setFacing] = createSignal<Facing>(state.move.facing);
   const [modal, setModal] = createSignal<Modal | null>(null);
   const [demo, setDemo] = createSignal<AttractStatus | null>(null);
+  const [scene, setScene] = createSignal<SceneSlot | null>(cloneScene(state.scene));
+  const [fatalError, setFatalError] = createSignal<string | null>(state.interp.error?.message ?? null);
   // Live host viewport: console hosts omit ui.__viewport (spec screen),
   // desktop windows publish and resize it. Polled in onFrame like
   // apps/launcher, so no host-specific subscription lives in the view.
@@ -524,6 +573,8 @@ export function GameView(props: {
       if (op !== fade()) setFade(op);
       const shownModal = attract ? attract.presentedModal() : state.interp.modal;
       setModal((m) => (modalChanged(m, shownModal) ? deepClone(shownModal) : m));
+      setScene(state.scene ? cloneScene(state.scene) : null);
+      setFatalError(state.interp.error?.message ?? null);
       if (status) {
         const st = status;
         setDemo((d) =>
@@ -542,27 +593,29 @@ export function GameView(props: {
 
   return (
     <View class="w-full h-full overflow-hidden bg-black">
-      {/* The frame clips each axis to min(map, viewport). Undersized axes
-          are centered over the black root; oversized axes start at zero
-          and the inner world translates by the clamped follow camera. */}
-      <View
-        class="absolute overflow-hidden"
-        style={{
-          posType: 1,
-          insetL: worldFrame().x,
-          insetT: worldFrame().y,
-          width: worldFrame().w,
-          height: worldFrame().h,
-        }}
-        debugName="rpgkit-world-frame"
-      >
-        <View
-          class="absolute"
-          nodeRef={(n) => {
-            worldNode = n;
-          }}
-          debugName="rpgkit-world"
-        >
+      <Show when={scene() === null}>
+        <>
+          {/* The frame clips each axis to min(map, viewport). Undersized axes
+              are centered over the black root; oversized axes start at zero
+              and the inner world translates by the clamped follow camera. */}
+          <View
+            class="absolute overflow-hidden"
+            style={{
+              posType: 1,
+              insetL: worldFrame().x,
+              insetT: worldFrame().y,
+              width: worldFrame().w,
+              height: worldFrame().h,
+            }}
+            debugName="rpgkit-world-frame"
+          >
+            <View
+              class="absolute"
+              nodeRef={(n) => {
+                worldNode = n;
+              }}
+              debugName="rpgkit-world"
+            >
           {stream ? (
             <StreamedChunkLayer
               mapId={mapId()}
@@ -619,6 +672,7 @@ export function GameView(props: {
               worldWidth={worldWidth}
               sprites={sprites}
               npcSrc={assets.npcSrc}
+              extensions={session.extensions}
               player={assets.player}
               playerHeight={assets.playerHeight ?? 16}
               pose={pose}
@@ -628,16 +682,28 @@ export function GameView(props: {
               camera={() => camera}
             />
           </OccludingUpperLayer>
-        </View>
-      </View>
+            </View>
+          </View>
 
-      <DialogBox
-        modal={modal}
-        legend={actions.legend}
-        theme={props.theme}
-        faces={props.faces}
-        faceWidth={props.faceWidth}
-      />
+          <DialogBox
+            modal={modal}
+            legend={actions.legend}
+            theme={props.theme}
+            faces={props.faces}
+            faceWidth={props.faceWidth}
+          />
+        </>
+      </Show>
+
+      <Show when={scene() !== null}>
+        {BattleSceneView ? (
+          <BattleSceneView
+            state={scene()!.state}
+            width={viewport().w}
+            height={viewport().h}
+          />
+        ) : null}
+      </Show>
 
       {/* D1/D2 demo overlay. In attract a small DEMO plate with the tape
           frame number sits in the top-right corner, away from the action.
@@ -686,6 +752,29 @@ export function GameView(props: {
         style={{ posType: 1, bgColor: "#000000", opacity: fade() }}
         debugName="rpgkit-fade"
       />
+      <Show when={fatalError() !== null}>
+        <View
+          class="absolute inset-0 flex-col justify-center items-center"
+          style={{ posType: 1, bgColor: "#120b12" }}
+          debugName="rpgkit-fatal-error"
+        >
+          <Text
+            class="text-sm"
+            style={{ textColor: "#ff8a8a", lineHeight: 18, height: 18 }}
+            debugName="rpgkit-fatal-error-title"
+          >
+            EVENT ERROR
+          </Text>
+          <View style={{ height: 8 }} />
+          <Text
+            class="text-xs"
+            style={{ textColor: "#f3dfe8", lineHeight: 14, height: 28 }}
+            debugName="rpgkit-fatal-error-message"
+          >
+            {fatalError() ?? ""}
+          </Text>
+        </View>
+      </Show>
     </View>
   );
 }

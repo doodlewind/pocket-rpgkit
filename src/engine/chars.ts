@@ -31,7 +31,13 @@
 // it freezes for the interaction (MV Game_Event lock). PARALLEL fibers do
 // not lock.
 
-import { activePage, eventKey, randInt, type SwitchState } from "./interpreter.ts";
+import {
+  activePage,
+  eventKey,
+  randInt,
+  type ExtensionScope,
+  type SwitchState,
+} from "./interpreter.ts";
 import { keyedRecord } from "./clone.ts";
 import { stepPixels, stepFrames, type MovementConfig } from "./movement.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
@@ -212,6 +218,7 @@ export function syncPages(
   erased: ReadonlySet<string>,
   placements: Readonly<Record<string, Placement>> = keyedRecord(),
   facing?: Facing,
+  extension?: ExtensionScope,
 ): { state: CharsState; result: SyncResult } {
   const s = cloneChars(s0);
   const abortedWaiters: string[] = [];
@@ -220,7 +227,7 @@ export function syncPages(
   for (const ev of map.events ?? []) {
     const key = eventKey(map.id, ev.id);
     if (erased.has(key)) continue;
-    const active = activePage(ev, sw, map.id, facing);
+    const active = activePage(ev, sw, map.id, facing, extension);
     if (!active) continue;
     live.add(ev.id);
 

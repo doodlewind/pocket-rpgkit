@@ -21,14 +21,17 @@ state.
   `approach` move steps (fixed neighbour order, respects all edge guards
   and bodies; the search is sliced across reference ticks to bound QuickJS
   frame cost).
-- `interpreter.ts` — event pages, triggers, the 18-command interpreter
-  (the v1 15 plus `lockInput` / `unlockInput` / `place`), the typewriter
+- `interpreter.ts` — event pages, triggers, the 20-command interpreter
+  (the v1 15 plus `lockInput` / `unlockInput` / `place` / `ext` / `battle`), the typewriter
   clock, the seeded RNG, saveable switch state.
+- `extensions.ts` — namespaced pure command/condition handlers, the opaque
+  JSON extension slot, validation and save codecs.
+- `battle.ts` — game-owned battle reducer and scene contracts.
 - `chars.ts` — per-map character motion: page patrol routes, autonomous
   random/approach, command-forced routes, body collision (only
   `blocks: true` pages stop a character, as they stop the player).
-- `session.ts` — the multi-map fold: transfer (map swap + fade) and
-  moveRoute completion across the mover / characters / interpreter.
+- `session.ts` — the multi-map fold: transfer (map swap + fade), moveRoute
+  completion and battle-scene lifecycle across mover/characters/interpreter.
 - `clone.ts` — host-portable deep copy (the desktop QuickJS realm has no
   `structuredClone`).
 - `schema-validate.ts` — zero-dependency checker for the JSON schema
@@ -156,7 +159,8 @@ state = stepSession(session, state, {          // once per virtual frame
 4. **interpreter.stepInterp** — fed the live NPC cells for trigger scans.
 5. **external requests** — a `transfer` swaps map/fresh-interp/characters
    while keeping `state.sw`; `moveRoute` installs on an NPC (or the
-   player) and resumes its fiber when the route lands.
+   player) and resumes its fiber when the route lands; `battle` derives one
+   seed from `state.sw.rng` and parks its fiber in `state.scene`.
 
 Transfer semantics:
 
@@ -171,3 +175,70 @@ Transfer semantics:
   upper `Image` per **current** map plus per-map NPC containers: a swap is
   an `Image` src change and a container `display` toggle — O(maps), not the
   1998-op sliding-chunk burst the R1 review measured.
+
+## Extensions and battle scenes
+
+`createSession(project, hz, options)` accepts `options.maps`,
+`options.extensions` and `options.battle`. The former bare-repository third
+argument remains accepted for v1 callers.
+
+An `ext` command handler receives cloned JSON arguments, read-only built-in
+banks and `random()`, the only permitted entropy source. It returns a new
+`ext` value and/or finite number/string variable replacements. An `ext`
+condition is read-only and cannot draw randomness. `SessionState.ext`
+defaults to `null`; its validator runs on every boundary, its optional codec
+wraps save/restore bytes, and save checksums cover the encoded form. Inline
+projects validate every namespaced call at `createSession`; sharded projects
+also validate each acquired map. `allowUnknown` is an explicit preview-only
+escape hatch.
+
+A `battle` command parks its fiber and publishes a setup JSON value. General
+interpreter execution remains parallel fibers (ascending event key) before the
+blocking main fiber, preserving same-tick visibility for every other command.
+Battle publication is ordered separately: requests newly emitted in a tick
+are staged and appended to the persistent queue main first, then parallel
+fibers by ascending event key. The queue head starts immediately when the
+scene slot is free. After a scene completes and resumes its owner, the next
+queued request starts on the next reference tick. A `start()` result of
+`null` resumes that fiber immediately and consumes no scene slot.
+`BattleRules.start(ext, setup, seed)` may decline with `null`; otherwise its
+returned JSON state becomes `SessionState.scene.state`.
+`BattleRules.step(state, input, ticks)` receives only scene input, once per
+host frame, with fixed-reference `ticks`. `done` returns ext, a
+win/lose/escape/draw result, optional variable and switch writes, and an
+optional transfer. Completion validates every value before committing any of
+them, runs the result branch, then runs the transfer; the transfer can
+therefore rebuild the map interpreter without discarding branch effects.
+
+Scene-time map behavior freezes the map by default, matching RPG Maker MV and
+Tuxemon:
+
+- manual player input is routed only to the battle reducer;
+- page synchronization, player/NPC autonomous or forced movement, and every
+  map interpreter fiber stay frozen;
+- the absolute interpreter clock remains rate-stable while relative wait and
+  typewriter timers are shifted with it, so paused commands do not elapse;
+- `GameView` hides the map/dialog tree and renders the registered battle
+  component from `{ state, width, height }` only.
+
+Pass `scene: { worldContinues: true }` to `createSession`, `GameView`, or
+`AttractController` to opt into background map simulation. Any battle request
+published in that mode joins the same FIFO instead of replacing a request or
+throwing because another scene is active. Invalid registered `BattleRules`
+return values remain programmer-contract errors; authored combinations of
+battle events do not throw from `stepSession`.
+
+A variable-addressed `transfer` resolves against the live variable bank. An
+unset/wrong-typed map, coordinate, or direction operand, and a resolved map id
+that the project does not own, record a fatal content error instead of
+throwing from `stepSession`. The playfield then remains frozen, `GameView`
+shows the error message, and the save gate rejects the state. Extension and
+`BattleRules` callback return-shape assertions are different: they are
+registered game-code contract failures and intentionally still throw.
+
+An active scene or a non-empty battle queue is not a save point. Scene and
+queue state still live in the ordinary reducer snapshot used by attract
+rewind, so a refold may cross map/queue/battle boundaries byte-for-byte. An
+old v1 snapshot with `pendingBattle: null` hydrates to an empty queue; a
+populated legacy slot is explicitly rejected because it represents queued
+external work, which has never been a legal save point.

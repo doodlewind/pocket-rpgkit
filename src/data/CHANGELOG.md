@@ -159,5 +159,43 @@ fields and commands are optional and the v1 spellings keep their meaning.
 - Filesystem save helpers accept the shell content identity for writing,
   loading and listing slots, so a different map manifest or schema is rejected.
 
+## v1 amendment — 2026-09-29 (extension state and Battle Processing)
+
+- **Plugin commands and conditions:** `{ "op": "ext", "call":
+  "namespace.name", "args": <json> }` and `{ "kind": "ext", ... }` invoke
+  pure game handlers registered in `createSession` options. Unknown calls are
+  rejected up front; an explicit preview mode may treat them as command
+  no-ops / false conditions.
+- **Extension state:** `SessionState.ext` is an opaque JSON slot, defaulting
+  to `null`, with optional game validator and save codec. Saves, checksums and
+  rewind include it. Checksum-valid older v1 saves that omit the slot hydrate
+  it as `null`.
+- **Variable transfer operands:** `transfer.map`, `x`, `y` and `dir` may use
+  `{ "variable": "id" }` instead of a literal. They resolve from the live
+  variable bank when the command executes. Unset/wrong-typed operands and
+  unknown resolved maps now enter the fatal content-error state (frozen,
+  visible in `GameView`, and non-saveable) instead of throwing from the host
+  frame loop.
+- **Battle Processing:** `{ "op": "battle", "setup": <json>, "onWin"?,
+  "onLose"?, "onEscape"? }` parks its event fiber in a game-owned pure battle
+  scene. The scene is seeded from one saved session RNG draw, advances in
+  fixed reference ticks, writes extension/variable state on completion and
+  resumes through the matching branch. A completion transfer follows the
+  branch. Active battles cannot be saved but are included in attract rewind.
+- **Battle queue and world policy:** concurrent requests now queue in
+  deterministic main-then-parallel-key order instead of overwriting a parked
+  fiber. This ordering applies only while appending newly emitted battle
+  requests; the established generic fold remains parallel-key-first and main
+  last. The next battle starts on the reference tick after completion.
+  Battles freeze page sync, movement, and map fibers by default; games may
+  explicitly choose `scene.worldContinues`. Active scenes and non-empty
+  queues are both non-saveable, and authored requests during a scene no
+  longer throw.
+- **Battle result switches:** `BattleCompletion.switches` atomically writes
+  boolean switches alongside extension state and variable `writes`.
+- The editor's schema-backed raw JSON model validates and round-trips both
+  additions without requiring a specialized form. Existing projects and
+  saves retain their prior behavior and defaults.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

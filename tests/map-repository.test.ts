@@ -517,3 +517,62 @@ describe("sharded maps keep project system options", () => {
     expect(session.worlds.get("map_01")!.messageBlocksPlayer).toBe(true);
   });
 });
+
+describe("staged map loading keeps session registrations", () => {
+  function stagedExtensionSession(register: boolean) {
+    const project = fixture();
+    (project.maps[0]!.events![0]!.pages[0]!.commands[0] as { fade?: number }).fade = 0.4;
+    project.maps[1]!.events!.push({
+      id: "mark",
+      x: 3,
+      y: 3,
+      pages: [{ trigger: "parallel", commands: [
+        { op: "ext", call: "demo.mark", args: null },
+      ] }],
+    });
+    const split = splitProjectMaps(project);
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+    const base = createJsonMapRepository(split.shell.mapIndex, {
+      read: (entry) => files.get(entry),
+    });
+    let fullAcquires = 0;
+    const repository: MapRepository = {
+      ...base,
+      acquire(id) {
+        fullAcquires++;
+        return base.acquire(id);
+      },
+    };
+    const session = createSession(split.shell, 60, {
+      maps: repository,
+      extensions: register
+        ? { initial: null, commands: { "demo.mark": () => ({ ext: "marked" }) } }
+        : {},
+    });
+    const state = startSession(split.shell, session);
+    return { session, state, fullAcquires: () => fullAcquires };
+  }
+
+  test("a map prepared in fade-out units runs registered extension commands", () => {
+    const { session, state: start, fullAcquires } = stagedExtensionSession(true);
+    const before = fullAcquires();
+    let state = stepSession(session, start, { buttons: 0, confirmEdge: true });
+    for (let i = 0; i < 40 && state.mapId === "map_00"; i++) {
+      state = stepSession(session, state, { buttons: 0 });
+    }
+    expect(state.mapId).toBe("map_01");
+    expect(fullAcquires()).toBe(before);
+    for (let i = 0; i < 40 && state.ext === null; i++) {
+      state = stepSession(session, state, { buttons: 0 });
+    }
+    expect(state.ext).toBe("marked");
+  });
+
+  test("an unregistered call in a staged map is rejected like a full acquire", () => {
+    const { session, state: start } = stagedExtensionSession(false);
+    let state = stepSession(session, start, { buttons: 0, confirmEdge: true });
+    expect(() => {
+      for (let i = 0; i < 40; i++) state = stepSession(session, state, { buttons: 0 });
+    }).toThrow(/unregistered extension calls: command demo\.mark/);
+  });
+});

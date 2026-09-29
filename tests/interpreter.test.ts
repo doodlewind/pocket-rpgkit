@@ -612,10 +612,35 @@ describe("trigger arbitration", () => {
     let s = idle(createInterpState(), w, 2); // parallel ran once per frame
     expect(s.sw.variables["drips"]).toBe(2);
     s = confirmAt(s, w); // open the dialog; parallel keeps running
-    const before = s.sw.variables["drips"]!;
+    const before = s.sw.variables["drips"] as number;
     s = idle(s, w, 6);
     expect(s.modal?.kind).toBe("text");
     expect(s.sw.variables["drips"]).toBe(before + 6);
+  });
+
+  test("parallels run before main for general same-tick visibility", () => {
+    const parallel = event("parallel", 0, 0, [
+      { op: "variable", id: "v.parallel", set: { op: "set", value: 1 } },
+      {
+        op: "if",
+        if: { kind: "variable", id: "v.x", op: "==", value: 1 },
+        then: [{ op: "variable", id: "v.y", set: { op: "set", value: 1 } }],
+      },
+    ], "parallel");
+    const main = event("main", 0, 0, [
+      { op: "variable", id: "v.x", set: { op: "set", value: 1 } },
+      {
+        op: "if",
+        if: { kind: "variable", id: "v.parallel", op: "==", value: 1 },
+        then: [{ op: "variable", id: "v.mainSawParallel", set: { op: "set", value: 1 } }],
+      },
+    ], "autorun");
+
+    const s = idle(createInterpState(), createWorld(map([main, parallel])));
+
+    expect(s.sw.variables["v.x"]).toBe(1);
+    expect(s.sw.variables["v.y"]).toBeUndefined();
+    expect(s.sw.variables["v.mainSawParallel"]).toBe(1);
   });
 
   test("only one blocking fiber runs: an autorun is not interrupted by an action", () => {

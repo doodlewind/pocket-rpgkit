@@ -418,10 +418,10 @@
           "required": ["op", "map", "x", "y"],
           "properties": {
             "op": { "const": "transfer" },
-            "map": { "type": "string" },
-            "x": { "type": "integer", "minimum": 0 },
-            "y": { "type": "integer", "minimum": 0 },
-            "dir": { "enum": ["down", "left", "right", "up", "keep"] },
+            "map": { "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/variableRef" }] },
+            "x": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/variableRef" }] },
+            "y": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/variableRef" }] },
+            "dir": { "oneOf": [{ "enum": ["down", "left", "right", "up", "keep"] }, { "$ref": "#/$defs/variableRef" }] },
             "fade": { "type": "number", "minimum": 0, "maximum": 2 }
           }
         },
@@ -536,8 +536,42 @@
             "op": { "const": "common" },
             "id": { "type": "string" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "call", "args"],
+          "properties": {
+            "op": { "const": "ext" },
+            "call": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*(\\.[A-Za-z][A-Za-z0-9_-]*)+$" },
+            "args": {}
+          },
+          "description": "Namespaced game extension command. Its pure handler is registered when the session is created."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "setup"],
+          "properties": {
+            "op": { "const": "battle" },
+            "setup": {},
+            "onWin": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+            "onLose": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+            "onEscape": { "type": "array", "items": { "$ref": "#/$defs/command" } }
+          },
+          "description": "Battle Processing: park the event fiber while the registered battle reducer owns the scene, then run the matching optional result branch."
         }
       ]
+    },
+
+    "variableRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variable"],
+      "properties": {
+        "variable": { "type": "string", "minLength": 1 }
+      },
+      "description": "Resolve this operand from the live event-variable bank."
     },
 
     "charTarget": {
@@ -685,6 +719,17 @@
             "kind": { "const": "facing" },
             "dir": { "enum": ["down", "left", "right", "up"], "description": "The player facing. In a page condition it gates action/playerTouch pages by direction; in a playerTouch page it also re-fires when the player turns while standing in the area." }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "call", "args"],
+          "properties": {
+            "kind": { "const": "ext" },
+            "call": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*(\\.[A-Za-z][A-Za-z0-9_-]*)+$" },
+            "args": {}
+          },
+          "description": "Namespaced game extension condition, evaluated by a registered pure handler."
         }
       ]
     },

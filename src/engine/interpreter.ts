@@ -24,7 +24,15 @@
 // they finish (MV semantics): the victory autorun ends its loop by flipping
 // its self switch, which changes its active page.
 
-import { keyedRecord } from "./clone.ts";
+import { deepClone, keyedRecord } from "./clone.ts";
+import {
+  assertJsonValue,
+  cloneExtension,
+  createExtensionRuntime,
+  type ExtensionCommandContext,
+  type ExtensionReadContext,
+  type ExtensionRuntime,
+} from "./extensions.ts";
 import { DEFAULT_PLAYER_NAME, substituteLines, substitutePlayerName } from "./player-name.ts";
 import type {
   Command,
@@ -33,10 +41,16 @@ import type {
   Dir,
   Facing,
   GameEvent,
+  JsonValue,
   MapDef,
   MoveRoute,
   Page,
   RouteTarget,
+  TransferCoordinate,
+  TransferDirection,
+  TransferMap,
+  VariableRef,
+  VariableValue,
 } from "./types.ts";
 
 export const TICK_HZ = 60;
@@ -94,7 +108,7 @@ export interface SwitchState {
    *  models one held key per event; the sample game uses only A. */
   self: Record<string, SelfKey | undefined>;
   items: Record<string, number>;
-  variables: Record<string, number>;
+  variables: Record<string, VariableValue>;
   gold: number;
   /** The player's name, substituted for the {name} text token. Part of the
    *  save snapshot; a fresh session seeds it from Project.playerName. */
@@ -126,12 +140,14 @@ export function evalCondition(
   s: SwitchState,
   eventKey: string,
   facing?: Facing,
+  extension?: ExtensionScope,
 ): boolean {
   switch (c.kind) {
     case "switch":
       return (keyedValue(s.switches, c.id) ?? false) === (c.value ?? true);
     case "variable": {
       const v = keyedValue(s.variables, c.id) ?? 0;
+      if (typeof v !== "number") return false;
       switch (c.op) {
         case ">=": return v >= c.value;
         case "<=": return v <= c.value;
@@ -150,15 +166,49 @@ export function evalCondition(
       // A facing condition needs a live player direction. Callers that do
       // not have one cannot prove the condition and therefore fail it.
       return facing !== undefined && facing === FACING_OF_DIR[c.dir];
+    case "ext": {
+      // Map acquisition validates registration. Missing handlers and
+      // non-boolean results are game-programming contract violations, not
+      // authored value failures, so these assertions intentionally throw.
+      const handler = extension?.runtime.conditions[c.call];
+      if (!handler) {
+        if (extension?.runtime.allowUnknown) return false;
+        throw new Error(`extension condition ${JSON.stringify(c.call)} is not registered`);
+      }
+      const context: ExtensionReadContext = {
+        ext: deepClone(extension.ext),
+        switches: s.switches,
+        variables: s.variables,
+        items: s.items,
+        gold: s.gold,
+      };
+      const result = handler(context, deepClone(c.args));
+      if (typeof result !== "boolean") {
+        throw new Error(`extension condition ${JSON.stringify(c.call)} must return a boolean`);
+      }
+      return result;
+    }
   }
+}
+
+/** Condition-only view of the game extension registry plus live state. */
+export interface ExtensionScope {
+  runtime: ExtensionRuntime;
+  ext: JsonValue;
 }
 
 const FACING_OF_DIR: Record<Dir, Facing> = { down: 0, left: 1, up: 2, right: 3 };
 
 /** True when every clause of a `condition.all` list holds. */
-function allClausesHold(clauses: Condition[], s: SwitchState, eventKey: string, facing?: Facing): boolean {
+function allClausesHold(
+  clauses: Condition[],
+  s: SwitchState,
+  eventKey: string,
+  facing?: Facing,
+  extension?: ExtensionScope,
+): boolean {
   for (const c of clauses) {
-    if (!evalCondition(c, s, eventKey, facing)) return false;
+    if (!evalCondition(c, s, eventKey, facing, extension)) return false;
   }
   return true;
 }
@@ -174,6 +224,7 @@ export function pageConditionHolds(
   s: SwitchState,
   eventKey: string,
   facing?: Facing,
+  extension?: ExtensionScope,
 ): boolean {
   const c = p.condition;
   if (!c) return true;
@@ -181,6 +232,7 @@ export function pageConditionHolds(
   if (c.selfSwitch !== undefined && keyedValue(s.self, eventKey) !== c.selfSwitch) return false;
   if (c.variable) {
     const v = keyedValue(s.variables, c.variable.id) ?? 0;
+    if (typeof v !== "number") return false;
     const { op, value } = c.variable;
     if (op === ">=" && !(v >= value)) return false;
     if (op === "<=" && !(v <= value)) return false;
@@ -188,7 +240,7 @@ export function pageConditionHolds(
     if (op === "!=" && !(v !== value)) return false;
   }
   if (c.item !== undefined && (keyedValue(s.items, c.item) ?? 0) < 1) return false;
-  if (c.all && !allClausesHold(c.all, s, eventKey, facing)) return false;
+  if (c.all && !allClausesHold(c.all, s, eventKey, facing, extension)) return false;
   return true;
 }
 
@@ -199,10 +251,11 @@ export function activePage(
   s: SwitchState,
   mapId: string,
   facing?: Facing,
+  extension?: ExtensionScope,
 ): { page: Page; index: number } | null {
   const key = eventKey(mapId, ev.id);
   for (let i = ev.pages.length - 1; i >= 0; i--) {
-    if (pageConditionHolds(ev.pages[i]!, s, key, facing)) return { page: ev.pages[i]!, index: i };
+    if (pageConditionHolds(ev.pages[i]!, s, key, facing, extension)) return { page: ev.pages[i]!, index: i };
   }
   return null;
 }
@@ -257,9 +310,24 @@ export type Instr =
   | { op: "lockInput" }
   | { op: "unlockInput" }
   | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir: Dir | null }
-  | { op: "transfer"; map: string; x: number; y: number; dir: Dir | "keep"; fadeFrames: number }
+  | {
+      op: "transfer";
+      map: TransferMap;
+      x: TransferCoordinate;
+      y: TransferCoordinate;
+      dir: TransferDirection;
+      fadeFrames: number;
+    }
   | { op: "moveRoute"; target: RouteTarget; wait: boolean; route: MoveRoute }
-  | { op: "common"; id: string };
+  | { op: "common"; id: string }
+  | { op: "ext"; call: string; args: JsonValue }
+  | {
+      op: "battle";
+      setup: JsonValue;
+      onWin: Prog | null;
+      onLose: Prog | null;
+      onEscape: Prog | null;
+    };
 
 export type Prog = Instr[];
 
@@ -355,6 +423,18 @@ export function compile(cmds: readonly Command[], hz: number = TICK_HZ): Prog {
           break;
         case "common":
           emit({ op: "common", id: c.id });
+          break;
+        case "ext":
+          emit({ op: "ext", call: c.call, args: deepClone(c.args) });
+          break;
+        case "battle":
+          emit({
+            op: "battle",
+            setup: deepClone(c.setup),
+            onWin: c.onWin ? compile(c.onWin, hz) : null,
+            onLose: c.onLose ? compile(c.onLose, hz) : null,
+            onEscape: c.onEscape ? compile(c.onEscape, hz) : null,
+          });
           break;
       }
     }
@@ -473,6 +553,12 @@ export interface PendingMoveRoute {
   wait: boolean;
 }
 
+/** Battle Processing request published on the tick that parks its fiber. */
+export interface PendingBattle {
+  fiber: string;
+  setup: JsonValue;
+}
+
 /** A `place` command published on THIS step. The session
  *  relocates the matching CharState after the fold; the durable position
  *  also lands in InterpState.placements so a later-created character (a
@@ -511,15 +597,21 @@ export interface World {
   /** Project.system.messageBlocksPlayer: an open box of any fiber holds
    *  the player (messageHoldsPlayer). */
   messageBlocksPlayer?: boolean;
+  /** Pure game handlers, retained with the compiled world and never saved. */
+  extensions: ExtensionRuntime;
 }
 
-/** Project-wide options a World is compiled with (Project.system). */
+/** Options a World is compiled with: Project.system flags plus the
+ *  session's registered extension handlers. */
 export interface WorldOptions {
   messageBlocksPlayer?: boolean;
+  extensions?: ExtensionRuntime;
 }
 
 export interface InterpError {
-  kind: "runaway";
+  /** `runaway` is an engine execution bound; `content` is an authored
+   * command whose live operands cannot be executed safely. */
+  kind: "runaway" | "content";
   message: string;
 }
 
@@ -548,6 +640,10 @@ export interface InterpState {
    *  publish more than one before it parks (a fire-and-forget player turn
    *  immediately followed by a waited self-route); the session drains all. */
   pendingMoveRoutes: PendingMoveRoute[];
+  /** Battle requests waiting for the scene host, in deterministic fiber
+   *  order. Unlike the other pending fields this queue survives interpreter
+   *  steps until the session consumes each request. */
+  pendingBattles: PendingBattle[];
   /** `place` requests published on THIS step, in command order. */
   pendingPlacements: PendingPlacement[];
   /** Keys of PARALLEL fibers canceled on THIS step because their page
@@ -580,6 +676,7 @@ export function createInterpState(sw: SwitchState = createSwitchState()): Interp
     cues: [],
     pendingTransfer: null,
     pendingMoveRoutes: [],
+    pendingBattles: [],
     pendingPlacements: [],
     abortedRoutes: [],
   };
@@ -630,6 +727,7 @@ export function createWorld(
     cellEvents,
     alwaysScanEvents,
     messageBlocksPlayer: options.messageBlocksPlayer === true,
+    extensions: options.extensions ?? createExtensionRuntime(),
   };
 }
 
@@ -710,6 +808,10 @@ export function cloneInterp(s0: InterpState): InterpState {
     pendingMoveRoutes: s0.pendingMoveRoutes.map((r) => ({
       ...r,
       route: cloneMoveRoute(r.route),
+    })),
+    pendingBattles: s0.pendingBattles.map((request) => ({
+      fiber: request.fiber,
+      setup: deepClone(request.setup),
     })),
     pendingPlacements: s0.pendingPlacements.map((p) => ({ ...p })),
     abortedRoutes: [...s0.abortedRoutes],
@@ -828,11 +930,16 @@ function startFiber(
  *  run to completion: a `wait` past the cancellation frame never applies.
  *  A canceled fiber parked on an external route reports its key so the
  *  session can abort the matching player/event move route. */
-function cancelStaleParallels(s: InterpState, w: World, facing: Facing): void {
+function cancelStaleParallels(
+  s: InterpState,
+  w: World,
+  facing: Facing,
+  extension: ExtensionScope,
+): void {
   for (const key of Object.keys(s.parallels)) {
     const f = s.parallels[key]!;
     const ev = worldEventById(w, key.slice(w.map.id.length + 1));
-    const active = ev && !s.erased[key] ? activePage(ev, s.sw, w.map.id, facing) : null;
+    const active = ev && !s.erased[key] ? activePage(ev, s.sw, w.map.id, facing, extension) : null;
     // Same page still active: keep running. A page change (index differs)
     // cancels; scanTriggers restarts a fiber for the new page on this step.
     if (active && active.index === f.pageIndex) continue;
@@ -842,7 +949,7 @@ function cancelStaleParallels(s: InterpState, w: World, facing: Facing): void {
   }
 }
 
-function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
+function scanTriggers(s: InterpState, w: World, input: InterpInput, extension: ExtensionScope): void {
   const rectOf = (ev: GameEvent): Rect | null => eventRect(ev, eventOrigin(ev, s, input));
   const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
   const prevFacing = input.prevFacing ?? input.facing;
@@ -872,7 +979,7 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
     if (s.erased[key]) continue;
     // Page selection sees the live player facing, so a `facing` clause
     // gates the page by direction.
-    const active = activePage(ev, s.sw, w.map.id, input.facing);
+    const active = activePage(ev, s.sw, w.map.id, input.facing, extension);
     if (!active) continue;
     const { page, index } = active;
     // A page with no commands has no fiber: an opened gate's touch page and
@@ -945,7 +1052,8 @@ function runInstant(s: InterpState, f: Fiber, ins: InstantInstr): void {
         s.sw.variables[ins.id] = r.value;
         s.sw.rng = r.next;
       } else {
-        const cur = s.sw.variables[ins.id] ?? 0;
+        const held = s.sw.variables[ins.id];
+        const cur = typeof held === "number" ? held : 0;
         s.sw.variables[ins.id] =
           ins.set.op === "set" ? ins.set.value
           : ins.set.op === "add" ? cur + ins.set.value
@@ -979,12 +1087,108 @@ interface StepBudget {
   remaining: number;
 }
 
+interface MutableExtensionScope extends ExtensionScope {
+  ext: JsonValue;
+}
+
+function runExtensionCommand(
+  s: InterpState,
+  extension: MutableExtensionScope,
+  call: string,
+  args: JsonValue,
+): void {
+  // Registration is validated when each map is acquired. A missing handler
+  // or malformed handler result therefore violates the game-programming
+  // contract, rather than being an authored event/variable failure; these
+  // assertions intentionally throw instead of becoming content errors.
+  const handler = extension.runtime.commands[call];
+  if (!handler) {
+    if (extension.runtime.allowUnknown) return;
+    throw new Error(`extension command ${JSON.stringify(call)} is not registered`);
+  }
+  let cursor = s.sw.rng;
+  const context: ExtensionCommandContext = {
+    ext: deepClone(extension.ext),
+    switches: s.sw.switches,
+    variables: s.sw.variables,
+    items: s.sw.items,
+    gold: s.sw.gold,
+    random: () => {
+      const draw = rngNext(cursor);
+      cursor = draw.next;
+      return draw.value;
+    },
+  };
+  const result = handler(context, deepClone(args));
+  s.sw.rng = cursor;
+  if (result === undefined) return;
+  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error(`extension command ${JSON.stringify(call)} must return an object or undefined`);
+  }
+  if (Object.prototype.hasOwnProperty.call(result, "ext")) {
+    assertJsonValue(result.ext, `extension command ${JSON.stringify(call)} result.ext`);
+    extension.ext = cloneExtension(extension.runtime, result.ext, `extension command ${JSON.stringify(call)} result.ext`);
+  }
+  if (result.writes !== undefined) {
+    if (result.writes === null || typeof result.writes !== "object" || Array.isArray(result.writes)) {
+      throw new Error(`extension command ${JSON.stringify(call)} result.writes must be a record`);
+    }
+    for (const id of Object.keys(result.writes)) {
+      const value = result.writes[id];
+      if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
+        throw new Error(`extension command ${JSON.stringify(call)} write ${JSON.stringify(id)} must be a string or finite number`);
+      }
+      s.sw.variables[id] = value;
+    }
+  }
+}
+
+function variableRef(value: unknown): value is VariableRef {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    typeof (value as VariableRef).variable === "string";
+}
+
+function resolveTransfer(
+  s: InterpState,
+  ins: Extract<Instr, { op: "transfer" }>,
+  fiber: string,
+): Omit<PendingTransfer, "fiber"> | null {
+  const map = variableRef(ins.map) ? s.sw.variables[ins.map.variable] : ins.map;
+  const x = variableRef(ins.x) ? s.sw.variables[ins.x.variable] : ins.x;
+  const y = variableRef(ins.y) ? s.sw.variables[ins.y.variable] : ins.y;
+  const dir = variableRef(ins.dir) ? s.sw.variables[ins.dir.variable] : ins.dir;
+  if (typeof map !== "string" || map.length === 0) {
+    s.error = {
+      kind: "content",
+      message: `transfer in ${fiber}: map variable must hold a non-empty string`,
+    };
+    return null;
+  }
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 ||
+      typeof y !== "number" || !Number.isInteger(y) || y < 0) {
+    s.error = {
+      kind: "content",
+      message: `transfer in ${fiber}: coordinate variables must hold non-negative integers`,
+    };
+    return null;
+  }
+  if (dir !== "keep" && dir !== "down" && dir !== "left" && dir !== "right" && dir !== "up") {
+    s.error = {
+      kind: "content",
+      message: `transfer in ${fiber}: direction variable must hold down|left|right|up|keep`,
+    };
+    return null;
+  }
+  return { map, x, y, dir, fadeFrames: ins.fadeFrames };
+}
+
 function runFiber(
   s: InterpState,
   w: World,
   f: Fiber,
   input: InterpInput,
   budget: StepBudget,
+  extension: MutableExtensionScope,
 ): void {
   // Resolve already-suspending commands first; on resume the fiber falls
   // through into the run loop so the instant commands after a wait/text/
@@ -1093,7 +1297,7 @@ function runFiber(
     const ins = top.prog[top.pc]!;
     switch (ins.op) {
       case "if":
-        top.pc = evalCondition(ins.cond, s.sw, f.key, input.facing) ? top.pc + 1 : ins.onFalse;
+        top.pc = evalCondition(ins.cond, s.sw, f.key, input.facing, extension) ? top.pc + 1 : ins.onFalse;
         break;
       case "jmp":
         top.pc = ins.to;
@@ -1169,17 +1373,16 @@ function runFiber(
           cancellable: ins.cancel !== null,
         };
         return;
-      case "transfer":
+      case "transfer": {
+        const transfer = resolveTransfer(s, ins, f.key);
+        if (transfer === null) return;
         f.mode = "external";
         s.pendingTransfer = {
           fiber: f.key,
-          map: ins.map,
-          x: ins.x,
-          y: ins.y,
-          dir: ins.dir,
-          fadeFrames: ins.fadeFrames,
+          ...transfer,
         };
         return;
+      }
       case "moveRoute": {
         // Resolve "this" to the running fiber's own event id at publish
         // time; the session then only distinguishes the player from a map
@@ -1226,12 +1429,35 @@ function runFiber(
         f.stack.unshift({ prog, pc: 0 });
         break;
       }
+      case "ext":
+        runExtensionCommand(s, extension, ins.call, ins.args);
+        top.pc++;
+        break;
+      case "battle":
+        f.mode = "external";
+        s.pendingBattles.push({ fiber: f.key, setup: deepClone(ins.setup) });
+        return;
     }
   }
 }
 
-/** One virtual frame. Returns a NEW state; the input state is not mutated. */
-export function stepInterp(w: World, s0: InterpState, input: InterpInput): InterpState {
+export interface InterpStepResult {
+  interp: InterpState;
+  ext: JsonValue;
+}
+
+/** One virtual frame with the game-owned extension slot. Both returned
+ * values are new JSON state; neither input is mutated. */
+export function stepInterpWithExtensions(
+  w: World,
+  s0: InterpState,
+  input: InterpInput,
+  ext0: JsonValue,
+): InterpStepResult {
+  const extension: MutableExtensionScope = {
+    runtime: w.extensions,
+    ext: cloneExtension(w.extensions, ext0),
+  };
   // A fatalized state is frozen: no triggers scan, no fiber advances. The
   // frame clock still ticks so render/host code keeps its cadence, but the
   // cyclic program can never consume another step (review 1274 B1).
@@ -1239,30 +1465,45 @@ export function stepInterp(w: World, s0: InterpState, input: InterpInput): Inter
     const frozen = cloneInterp(s0);
     frozen.frame = s0.frame + 1;
     frozen.cues = [];
-    return frozen;
+    return { interp: frozen, ext: extension.ext };
   }
   const s = cloneInterp(s0);
   s.frame = s0.frame + 1;
   s.cues = [];
-  // Pending requests live only on the step that issued them: P1④ reads them
-  // off that step, performs the work, then calls continueExternal().
+  // Transfer/route/place requests live only on the step that issued them:
+  // P1④ reads them off that step, performs the work, then resumes the fiber.
+  // Battle requests are different: they remain FIFO-queued until the scene
+  // host can consume them without overwriting another parked fiber.
   s.pendingTransfer = null;
   s.pendingMoveRoutes = [];
   s.pendingPlacements = [];
   s.abortedRoutes = [];
 
-  cancelStaleParallels(s, w, input.facing);
-  scanTriggers(s, w, input);
+  cancelStaleParallels(s, w, input.facing, extension);
+  scanTriggers(s, w, input, extension);
   const budget: StepBudget = { remaining: RUNAWAY_STEP_LIMIT };
+  const queuedBattleCount = s.pendingBattles.length;
 
   // Parallels first (ascending key), then the blocking fiber, so a parallel
   // can never observe a value the main fiber sets later in the same frame.
+  // Battle requests are the one exception to the resulting publication
+  // order: collect this tick's parallel requests, run main, then append the
+  // new requests main-first behind every request already in the FIFO.
   for (const key of Object.keys(s.parallels).sort()) {
-    runFiber(s, w, s.parallels[key]!, input, budget);
-    if (s.error) return s;
+    runFiber(s, w, s.parallels[key]!, input, budget, extension);
+    if (s.error) break;
   }
-  if (s.main) runFiber(s, w, s.main, input, budget);
-  return s;
+  const parallelBattles = s.pendingBattles.splice(queuedBattleCount);
+  if (!s.error && s.main) runFiber(s, w, s.main, input, budget, extension);
+  const mainBattles = s.pendingBattles.splice(queuedBattleCount);
+  s.pendingBattles.push(...mainBattles, ...parallelBattles);
+  return { interp: s, ext: extension.ext };
+}
+
+/** Backwards-compatible interpreter-only fold. Projects using extension
+ * state should use Session/stepSession, which carries the ext result. */
+export function stepInterp(w: World, s0: InterpState, input: InterpInput): InterpState {
+  return stepInterpWithExtensions(w, s0, input, w.extensions.initial).interp;
 }
 
 /** P1④ entry point: resume a fiber parked on transfer/moveRoute after the
@@ -1273,6 +1514,53 @@ export function continueExternal(s0: InterpState, fiberKey: string): InterpState
     if (!f || f.key !== fiberKey || f.mode !== "external") return;
     f.stack[0]!.pc++;
     f.mode = "run";
+  };
+  resume(s.main);
+  for (const f of Object.values(s.parallels)) resume(f);
+  return s;
+}
+
+/** Resume a Battle Processing instruction and push the result branch. A
+ * completion transfer is appended to that branch, so authored result
+ * commands run on the originating map before the map interpreter is rebuilt
+ * at the transfer boundary. `draw` has no MV branch and simply continues. */
+export function continueBattle(
+  s0: InterpState,
+  fiberKey: string,
+  result: "win" | "lose" | "escape" | "draw",
+  transfer: Omit<PendingTransfer, "fiber"> | null = null,
+): InterpState {
+  const s = cloneInterp(s0);
+  const resume = (f: Fiber | null): void => {
+    if (!f || f.key !== fiberKey || f.mode !== "external") return;
+    const top = f.stack[0];
+    const ins = top?.prog[top.pc];
+    if (!top || ins?.op !== "battle") return;
+    const branch =
+      result === "win" ? ins.onWin
+      : result === "lose" ? ins.onLose
+      : result === "escape" ? ins.onEscape
+      : null;
+    const continuation: Prog = branch ? [...branch] : [];
+    if (transfer) {
+      continuation.push({
+        op: "transfer",
+        map: transfer.map,
+        x: transfer.x,
+        y: transfer.y,
+        dir: transfer.dir,
+        fadeFrames: transfer.fadeFrames,
+      });
+    }
+    top.pc++;
+    f.mode = "run";
+    if (continuation.length > 0) {
+      if (f.stack.length >= MAX_FIBER_STACK_DEPTH) {
+        s.error = { kind: "runaway", message: `interpreter: stack depth exceeded in ${f.key}` };
+        return;
+      }
+      f.stack.unshift({ prog: continuation, pc: 0 });
+    }
   };
   resume(s.main);
   for (const f of Object.values(s.parallels)) resume(f);

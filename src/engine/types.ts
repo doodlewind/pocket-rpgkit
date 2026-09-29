@@ -7,6 +7,31 @@
 
 export type Dir = "down" | "left" | "right" | "up";
 
+/** Values which can cross the project/session/save boundary. Extension and
+ * battle payloads deliberately stay inside this JSON subset: a reducer state
+ * must not acquire host objects, functions, dates, NaN or undefined. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/** Event variables are numeric for the built-in arithmetic commands, but an
+ * extension may also write a string. String values make MV-style variable
+ * transfers useful with this format's string map ids and directions. */
+export type VariableValue = number | string;
+
+/** Read a command operand from the live variable bank. */
+export interface VariableRef {
+  variable: string;
+}
+
+export type TransferMap = string | VariableRef;
+export type TransferCoordinate = number | VariableRef;
+export type TransferDirection = Dir | "keep" | VariableRef;
+
 /** Facing as an engine index: 0 down, 1 left, 2 up, 3 right. Matches the
  *  BTN-driven order the camera reducer emits and the hero atlas file order. */
 export type Facing = 0 | 1 | 2 | 3;
@@ -93,7 +118,9 @@ export type Condition =
   | { kind: "selfSwitch"; key: "A" | "B" | "C" | "D"; value?: boolean }
   | { kind: "item"; id: string; count: number }
   | { kind: "gold"; amount: number }
-  | { kind: "facing"; dir: Dir };
+  | { kind: "facing"; dir: Dir }
+  /** Game-owned pure condition handler, registered on createSession(). */
+  | { kind: "ext"; call: string; args: JsonValue };
 
 export interface VariableSet {
   op: "set" | "add" | "sub";
@@ -117,7 +144,14 @@ export type Command =
   | { op: "variable"; id: string; set: VariableSet | VariableRandom }
   | { op: "selfSwitch"; key: "A" | "B" | "C" | "D"; value: boolean }
   | { op: "if"; if: Condition; then: Command[]; else?: Command[] }
-  | { op: "transfer"; map: string; x: number; y: number; dir?: Dir | "keep"; fade?: number }
+  | {
+      op: "transfer";
+      map: TransferMap;
+      x: TransferCoordinate;
+      y: TransferCoordinate;
+      dir?: TransferDirection;
+      fade?: number;
+    }
   | { op: "moveRoute"; target: RouteTarget; wait?: boolean; route: MoveRoute }
   | { op: "wait"; seconds: number }
   | { op: "gold"; set: "add" | "sub"; amount: number }
@@ -135,7 +169,18 @@ export type Command =
    *  optionally facing a direction there. "this" moves the running event;
    *  { event } moves another map event. Applied on the next character
    *  sync, so a page with blocks:true occupies the new cell. */
-  | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir?: Dir };
+  | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir?: Dir }
+  /** Game-owned pure command handler, registered on createSession(). */
+  | { op: "ext"; call: string; args: JsonValue }
+  /** MV-style Battle Processing. The game assigns meaning to setup and owns
+   * the pure battle reducer; the interpreter only parks/resumes the fiber. */
+  | {
+      op: "battle";
+      setup: JsonValue;
+      onWin?: Command[];
+      onLose?: Command[];
+      onEscape?: Command[];
+    };
 
 /** A page's activation gate. Every present clause must hold (AND). The
  *  four flat fields stay the v1 spelling; `all` is the compound

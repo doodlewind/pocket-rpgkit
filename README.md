@@ -5,8 +5,9 @@ built on [PocketJS](https://github.com/pocket-stack/pocketjs). It contains
 the parts an RPG-Maker-style game needs without any specific game:
 
 - **pure-TS engine** (`src/engine/`) — tile movement and collision, the
-  event interpreter (pages, triggers, 18 commands), map-character motion,
-  multi-map sessions, deterministic save snapshots. No host imports, no
+  event interpreter (pages, triggers, 20 commands), map-character motion,
+  multi-map sessions, deterministic extension state and battle scenes,
+  deterministic save snapshots. No host imports, no
   wall clock, no `Math.random`: a session is one pure fold per virtual
   frame, so a button tape replays byte-for-byte on every host;
 - **Solid UI components** (`src/ui/`) — `GameView`, a complete game screen
@@ -279,7 +280,7 @@ network boundary. Runtime loading checks compilation-critical structure by
 default because the splitter already performed the full schema check; pass
 `{ validate: "full" }` as the third argument for untrusted authoring inputs.
 
-`createSession(project, hz, repository)` synchronously validates and compiles
+`createSession(project, hz, { maps: repository })` synchronously validates and compiles
 only the starting map. A transfer acquires its destination, then evicts the
 old parsed map, interpreter world and passage table. These caches and the
 view's current-map actor list are derived data: they are absent from reducer
@@ -302,7 +303,7 @@ repositories must give `acquire` the same synchronous validated contract as
 resident map synchronously readable: attract-mode rollback can reacquire an
 earlier resident map within the same host frame.
 
-### The 18 commands
+### The 20 commands
 
 | op | purpose |
 | --- | --- |
@@ -311,8 +312,8 @@ earlier resident map within the same host frame.
 | `switch` | set a global switch |
 | `variable` | set/add/sub or a seeded random range |
 | `selfSwitch` | set the event-local A/B/C/D flag |
-| `if` | condition over switch/variable/selfSwitch/item/gold/facing, with `else` |
-| `transfer` | swap maps at x/y/dir, with an optional fade |
+| `if` | condition over switch/variable/selfSwitch/item/gold/facing or a registered `ext` predicate, with `else` |
+| `transfer` | swap maps at x/y/dir, with an optional fade; map/x/y/dir may be `{ "variable": "id" }` |
 | `moveRoute` | route the player, this event, or a named event through moves, turns, waits, deterministic `pathTo`, and `approach` |
 | `wait` | virtual-time pause (seconds, compiled against `simulationHz`) |
 | `gold` | add/sub gold |
@@ -323,6 +324,8 @@ earlier resident map within the same host frame.
 | `common` | run a common event's command list |
 | `lockInput` / `unlockInput` | cross-event input lock; freezes the mover and action but not autorun/parallel |
 | `place` | relocate `"this"` or a named event to a tile, optionally facing a direction |
+| `ext` | call a namespaced, game-registered pure command with JSON arguments |
+| `battle` | park the event in a game-registered battle scene, then run its optional win/lose/escape branch |
 
 Triggers: `action` (confirm on the faced or occupied tile),
 `playerTouch` (on cell entry), `autorun` (blocking, restarts after it
@@ -336,6 +339,116 @@ touch page re-fire on a turn in place. Switch/variable ids prefixed
 initial facing. Conditions compile to forward jumps; no command can
 express a loop, and the runtime backstops a hand-crafted cyclic program
 with a fatal interpreter error instead of hanging the frame loop.
+Within one reference tick, parallel fibers run in ascending event-key order
+before the blocking main fiber. Main can therefore observe an earlier
+parallel write, while a parallel cannot observe a main write made later in
+that tick.
+
+### Game extensions and Battle Processing
+
+Game-specific party, quest or combat data stays out of the generic event
+vocabulary. Register namespaced pure handlers when creating a session and
+keep their JSON state in `SessionState.ext`:
+
+```ts
+const session = createSession(project, simulationHz(), {
+  maps: repository, // optional for inline projects
+  extensions: {
+    initial: { party: [] },
+    commands: {
+      "game.add_member": (ctx, args) => ({
+        ext: addMember(ctx.ext, args),
+        writes: { "party.size": partySize(ctx.ext) + 1 },
+      }),
+    },
+    conditions: {
+      "game.party_ready": (ctx) => partyReady(ctx.ext),
+    },
+    // Optional encode/decode and validate hooks cover saves and restores.
+  },
+  battle: battleRules,
+});
+```
+
+An extension command receives read-only ext/switch/variable/item/gold data
+and a `random()` function backed by the session's saved mulberry32 cursor.
+It returns replacement `ext` and/or variable `writes`; an extension
+condition is read-only and has no random API. Call names must contain a
+namespace (`game.action`). `createSession` lists every command or condition
+used by an inline project but not registered. Editor previews may explicitly
+set `allowUnknown: true`, which makes unknown commands no-ops and conditions
+false. For a sharded project, the same check runs as each map is acquired.
+The optional extension codec encodes only save bytes; live state is decoded
+again on restore. Checksums and attract-mode refolds include the slot, and an
+older v1 save without it loads as `null`.
+
+`BattleRules` is the game-owned pure scene reducer:
+
+```ts
+interface BattleRules {
+  start(ext, setup, seed): { state: JsonValue; ext: JsonValue } | null;
+  step(state, input, ticks): JsonValue;
+  done(state): null | {
+    ext: JsonValue;
+    result: "win" | "lose" | "escape" | "draw";
+    writes?: Record<string, number | string>;
+    switches?: Record<string, boolean>;
+    transfer?: { map: string; x: number; y: number; dir?: Dir | "keep"; fade?: number };
+  };
+}
+```
+
+Starting a battle consumes exactly one session RNG draw and gives the
+derived u32 seed to `start`; `null` means no encounter and resumes the event
+immediately. Otherwise the event fiber parks in external mode and the JSON
+battle state lives in `SessionState.scene`. `step` is called once per host
+frame with 1/2/3/15 fixed reference ticks at 60/30/20/4 Hz. On completion,
+ext, variable writes, and boolean switch writes commit atomically, the matching
+result branch runs, and an optional transfer runs after that branch. `draw`
+has no branch.
+
+Battle requests are the deliberate ordering exception: requests newly emitted
+in one reference tick are staged and appended main first, then by ascending
+parallel event key, without changing the general parallel-before-main fiber
+execution order. Only the queue head starts. After its completion is applied
+and its fiber resumed, the next request starts on the next reference tick;
+`start()` returning `null` resumes immediately without occupying the scene.
+
+While a battle scene is active, host input goes only to `BattleRules.step`.
+By default page synchronization, player/NPC movement, and every map event
+fiber freeze; the battle-owning fiber remains parked. Set
+`scene={{ worldContinues: true }}` to opt into background world simulation;
+battle requests raised there still queue safely. `GameView` hides the map and
+dialog layers and mounts the registered scene component. That component
+receives only `{ state, width, height }`, so every visible animation cursor
+must be in battle state:
+
+```tsx
+mount(() => <GameView
+  project={project}
+  assets={GAME_ASSETS}
+  extensions={extensions}
+  battle={battleRules}
+  scene={{ worldContinues: false }}
+  battleScene={BattleScreen}
+/>);
+```
+
+Active battles and non-empty battle queues are not save points. They are
+nevertheless fully rewindable: `AttractController` accepts the same
+`extensions`, `battle`, and `scene` registrations, and reconstructs map,
+queue, and scene by folding the retained input prefix from a clean session.
+Authored concurrent/nested battle requests do not throw from `stepSession`;
+invalid values returned by registered game callbacks remain programming
+contract errors.
+
+Variable-addressed transfers validate their live map, coordinate, and
+direction operands when the command executes. An unset/wrong-typed operand or
+unknown map records a fatal `InterpState.error`, freezes the session, and is
+shown by `GameView` instead of escaping the host frame as an exception. Fatal
+states are not save points. A checksum-valid legacy v1 snapshot with a
+populated single `pendingBattle` slot is explicitly rejected as unsafe;
+`null` still hydrates to an empty queue.
 
 Only `blocks: true` pages have a body: a body stops the player and moving
 characters alike (characters also never step onto the player), and path
@@ -392,7 +505,7 @@ tape to `GameView`. On a host with `data.fs`, an `attract-tape.json` at
 the app's data root replaces the built-in tape without a rebuild.
 
 Saves are FNV-checksummed envelopes over a safe-point snapshot (mover on a
-tile boundary, no modal, no parked request). Hosts with `data.fs` write
+tile boundary, no modal, no parked request, no active scene). Hosts with `data.fs` write
 three slots through `src/host/save-fs.ts`; other hosts exchange the same
 envelope as URL-safe base64 text (the save code). For a sharded project, pass
 `session.content` to `saveSlotFs`, `loadSlotFs` and `listSlotsFs`; this writes

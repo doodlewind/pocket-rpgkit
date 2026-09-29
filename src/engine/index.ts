@@ -16,6 +16,8 @@ export * from "./motion-clock.ts";
 export * from "./movement.ts";
 export * from "./player-name.ts";
 export * from "./interpreter.ts";
+export * from "./extensions.ts";
+export * from "./battle.ts";
 export * from "./chars.ts";
 export * from "./session.ts";
 export * from "./attract.ts";

@@ -341,6 +341,8 @@ describe("messageBlocksPlayer — determinism", () => {
       interp: snap.interp,
       fade: null,
       playerRoute: null,
+      ext: snap.ext,
+      scene: null,
     };
 
     let heldFrames = 0;

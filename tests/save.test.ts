@@ -292,17 +292,40 @@ describe("P1⑤ save — envelope round trip", () => {
     ) as Record<string, unknown> & { state: SaveSnapshot; checksum: string };
     const legacyInterp = current.state.interp as Omit<
       InterpState,
-      "inputLocked" | "placements" | "pendingPlacements"
-    > & Partial<Pick<InterpState, "inputLocked" | "placements" | "pendingPlacements">>;
+      "inputLocked" | "placements" | "pendingPlacements" | "pendingBattles"
+    > & Partial<Pick<InterpState, "inputLocked" | "placements" | "pendingPlacements" | "pendingBattles">> & {
+      pendingBattle?: null;
+    };
     delete legacyInterp.inputLocked;
     delete legacyInterp.placements;
     delete legacyInterp.pendingPlacements;
+    delete legacyInterp.pendingBattles;
+    legacyInterp.pendingBattle = null;
     current.checksum = fnv1aText(canonicalJson(current.state));
 
     const restored = decodeEnvelopeText(JSON.stringify(current));
     expect(restored.interp.inputLocked).toBe(false);
     expect(restored.interp.placements).toEqual({});
     expect(restored.interp.pendingPlacements).toEqual([]);
+    expect(restored.interp.pendingBattles).toEqual([]);
+  });
+
+  test("rejects a legacy populated pendingBattle slot as an unsafe save point", () => {
+    const current = JSON.parse(
+      encodeEnvelope(createSnapshot("meadow", restPlayer(), createInterpState(), 0)),
+    ) as Record<string, unknown> & { state: SaveSnapshot; checksum: string };
+    const legacyInterp = current.state.interp as unknown as Record<string, unknown>;
+    delete legacyInterp.pendingBattles;
+    legacyInterp.pendingBattle = { fiber: "meadow/old-battle", setup: { enemyHp: 1 } };
+    current.checksum = fnv1aText(canonicalJson(current.state));
+
+    // Hydration wraps the old slot into pendingBattles, after which the
+    // ordinary save-point invariant rejects queued external work. Old
+    // canSave never emitted this state, so accepting it cannot restore a
+    // legitimate historical save.
+    expect(() => decodeEnvelopeText(JSON.stringify(current))).toThrow(
+      /state\.interp\.pendingBattles: no queued battles at a save point/,
+    );
   });
 });
 

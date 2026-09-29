@@ -31,24 +31,44 @@
 //
 // No host imports, no wall clock, no Math.random (docs/SIMULATION.md).
 
-import { keyedRecord } from "./clone.ts";
+import { deepClone, keyedRecord } from "./clone.ts";
 
 import {
   activePage,
   cloneInterp,
+  continueBattle,
   continueExternal,
   createInterpState,
   createWorld,
+  fiberIsExternal,
   isBusy,
   messageHoldsPlayer,
   randInt,
-  stepInterp,
+  rngNext,
+  secondsToFrames,
+  stepInterpWithExtensions,
+  type ExtensionScope,
   type InterpInput,
   type InterpState,
+  type PendingBattle,
   type PendingMoveRoute,
   type SwitchState,
   type WorldOptions,
 } from "./interpreter.ts";
+import {
+  assertJsonValue,
+  cloneExtension,
+  createExtensionRuntime,
+  extensionCallNameValid,
+  type ExtensionOptions,
+  type ExtensionRuntime,
+} from "./extensions.ts";
+import {
+  cloneScene,
+  type BattleInput,
+  type BattleRules,
+  type SceneSlot,
+} from "./battle.ts";
 import {
   charCell,
   cloneChars,
@@ -99,6 +119,9 @@ import type {
   MapRepository,
   MoveStep,
   ProjectSource,
+  Command,
+  Condition,
+  JsonValue,
   Sheet,
 } from "./types.ts";
 
@@ -145,15 +168,14 @@ export interface SessionState {
   interp: InterpState;
   fade: FadeState | null;
   playerRoute: PlayerRoute | null;
+  /** Opaque game-owned JSON. Every fold clones and validates it through the
+   * registered extension runtime; saves/checksums include it. */
+  ext: JsonValue;
+  /** Active full-screen scene. null is the backwards-compatible default. */
+  scene: SceneSlot | null;
 }
 
-export interface SessionInput {
-  buttons: number;
-  confirmEdge?: boolean;
-  cancelEdge?: boolean;
-  upEdge?: boolean;
-  downEdge?: boolean;
-}
+export interface SessionInput extends BattleInput {}
 
 interface SessionMapPreparation {
   id: string;
@@ -184,8 +206,111 @@ export interface Session {
   preparingMap: SessionMapPreparation | null;
   sheets: ReadonlyMap<string, Sheet>;
   commonEvents: CommonEvent[];
-  /** Project.system options every compiled world (eager or on demand) uses. */
+  /** Project.system options and the extension registry every compiled
+   * world (eager, on demand or staged) is built with. */
   worldOptions: WorldOptions;
+  /** Function registry/codec lives outside reducer state. */
+  extensions: ExtensionRuntime;
+  battle: BattleRules | null;
+  /** Scene policy is immutable host configuration, never reducer state. */
+  sceneOptions: Required<SceneOptions>;
+}
+
+export interface SceneOptions {
+  /** Advance map pages, characters and interpreter fibers while a full-screen
+   * scene is active. Defaults to false, matching RPG Maker/Tuxemon battles. */
+  worldContinues?: boolean;
+}
+
+export interface SessionOptions {
+  maps?: MapRepository;
+  extensions?: ExtensionOptions;
+  battle?: BattleRules;
+  scene?: SceneOptions;
+}
+
+function visitCondition(c: Condition, found: Set<string>): void {
+  if (c.kind === "ext") found.add(`condition ${c.call}`);
+}
+
+function visitCommands(commands: readonly Command[], found: Set<string>): void {
+  for (const command of commands) {
+    if (command.op === "ext") found.add(`command ${command.call}`);
+    if (command.op === "if") {
+      visitCondition(command.if, found);
+      visitCommands(command.then, found);
+      if (command.else) visitCommands(command.else, found);
+    } else if (command.op === "choices") {
+      for (const option of command.options) visitCommands(option.commands, found);
+      if (command.cancel) visitCommands(command.cancel.commands, found);
+    } else if (command.op === "battle") {
+      if (command.onWin) visitCommands(command.onWin, found);
+      if (command.onLose) visitCommands(command.onLose, found);
+      if (command.onEscape) visitCommands(command.onEscape, found);
+    }
+  }
+}
+
+function commandsUseBattle(commands: readonly Command[]): boolean {
+  for (const command of commands) {
+    if (command.op === "battle") return true;
+    if (command.op === "if" && (
+      commandsUseBattle(command.then) || commandsUseBattle(command.else ?? [])
+    )) return true;
+    if (command.op === "choices" && (
+      command.options.some((option) => commandsUseBattle(option.commands)) ||
+      commandsUseBattle(command.cancel?.commands ?? [])
+    )) return true;
+  }
+  return false;
+}
+
+function mapUsesBattle(map: MapDef): boolean {
+  return (map.events ?? []).some((event) =>
+    event.pages.some((page) => commandsUseBattle(page.commands))
+  );
+}
+
+function assertBattleRegistered(rules: BattleRules | null, used: boolean): void {
+  if (used && rules === null) {
+    throw new Error("createSession: project uses battle commands but no BattleRules were registered");
+  }
+}
+
+function mapExtensionCalls(map: MapDef): Set<string> {
+  const found = new Set<string>();
+  for (const event of map.events ?? []) {
+    for (const page of event.pages) {
+      for (const condition of page.condition?.all ?? []) visitCondition(condition, found);
+      visitCommands(page.commands, found);
+    }
+  }
+  return found;
+}
+
+function commonExtensionCalls(events: readonly CommonEvent[]): Set<string> {
+  const found = new Set<string>();
+  for (const event of events) visitCommands(event.commands, found);
+  return found;
+}
+
+function assertRegisteredExtensions(runtime: ExtensionRuntime, found: ReadonlySet<string>): void {
+  if (runtime.allowUnknown) return;
+  const missing: string[] = [];
+  for (const entry of found) {
+    const space = entry.indexOf(" ");
+    const kind = entry.slice(0, space);
+    const call = entry.slice(space + 1);
+    if (!extensionCallNameValid(call)) {
+      missing.push(`${kind} ${call} (invalid namespaced call)`);
+    } else if (kind === "command" ? !runtime.commands[call] : !runtime.conditions[call]) {
+      missing.push(entry);
+    }
+  }
+  if (missing.length > 0) {
+    missing.sort();
+    throw new Error(`createSession: unregistered extension calls: ${missing.join(", ")}`);
+  }
 }
 
 /** Acquire, validate and compile one map into the derived session cache. */
@@ -216,6 +341,8 @@ export function acquireSessionMap(sess: Session, id: string): MapDef {
   if (map.id !== expected.id || map.width !== expected.width || map.height !== expected.height) {
     throw new Error(`map repository: payload metadata mismatch for ${id}`);
   }
+  assertRegisteredExtensions(sess.extensions, mapExtensionCalls(map));
+  assertBattleRegistered(sess.battle, mapUsesBattle(map));
   // Compile into locals first. A throw leaves the live cache and simulation
   // untouched, which is what an async caller needs before retrying a frame.
   const world = createWorld(map, sess.commonEvents, MOTION_HZ, sess.worldOptions);
@@ -251,6 +378,8 @@ export function prepareSessionMapStep(sess: Session, id: string): boolean {
       if (map.id !== expected.id || map.width !== expected.width || map.height !== expected.height) {
         throw new Error(`map repository: payload metadata mismatch for ${id}`);
       }
+      assertRegisteredExtensions(sess.extensions, mapExtensionCalls(map));
+      assertBattleRegistered(sess.battle, mapUsesBattle(map));
       preparation.map = map;
     }
     return false;
@@ -291,13 +420,24 @@ export function releaseSessionMapsExcept(sess: Session, ids: readonly string[]):
 export function createSession(
   project: ProjectSource,
   hz: number = MOTION_HZ,
-  maps?: MapRepository,
+  optionsOrMaps?: SessionOptions | MapRepository,
 ): Session {
+  // v1.3 compatibility: the original third parameter was a bare repository.
+  const options: SessionOptions = optionsOrMaps &&
+    typeof (optionsOrMaps as MapRepository).acquire === "function" &&
+    typeof (optionsOrMaps as MapRepository).meta === "function"
+    ? { maps: optionsOrMaps as MapRepository }
+    : (optionsOrMaps as SessionOptions | undefined) ?? {};
+  const maps = options.maps;
+  const extensions = createExtensionRuntime(options.extensions);
   const sheets = new Map<string, Sheet>(project.sheets.map((s) => [s.id, s]));
   const commonEvents = [...(project.commonEvents ?? [])];
   const worldOptions: WorldOptions = {
     messageBlocksPlayer: project.system?.messageBlocksPlayer === true,
+    extensions,
   };
+  assertRegisteredExtensions(extensions, commonExtensionCalls(commonEvents));
+  assertBattleRegistered(options.battle ?? null, commonEvents.some((event) => commandsUseBattle(event.commands)));
   if (isProjectShell(project)) {
     if (!maps) throw new Error("map repository: ProjectShell requires a MapRepository");
     const index = validateMapIndex(project.mapIndex);
@@ -325,10 +465,17 @@ export function createSession(
       sheets,
       commonEvents,
       worldOptions,
+      extensions,
+      battle: options.battle ?? null,
+      sceneOptions: { worldContinues: options.scene?.worldContinues === true },
     };
     acquireSessionMap(session, project.start.map);
     releaseSessionMapsExcept(session, [project.start.map]);
     return session;
+  }
+  for (const map of project.maps) {
+    assertRegisteredExtensions(extensions, mapExtensionCalls(map));
+    assertBattleRegistered(options.battle ?? null, mapUsesBattle(map));
   }
   const inlineMaps = new Map<string, MapDef>(project.maps.map((m) => [m.id, m]));
   // Interpreter worlds compile at the FIXED motion reference: waits, text
@@ -353,6 +500,9 @@ export function createSession(
     sheets,
     commonEvents,
     worldOptions,
+    extensions,
+    battle: options.battle ?? null,
+    sceneOptions: { worldContinues: options.scene?.worldContinues === true },
   };
 }
 
@@ -360,6 +510,7 @@ export function startSession(
   project: ProjectSource,
   session: Session,
   sw0?: SwitchState,
+  ext0?: JsonValue,
 ): SessionState {
   const start = project.start;
   acquireSessionMap(session, start.map);
@@ -376,6 +527,8 @@ export function startSession(
       interp,
       fade: null,
       playerRoute: null,
+      ext: cloneExtension(session.extensions, ext0 === undefined ? session.extensions.initial : ext0),
+      scene: null,
     };
   }
   // Fresh playthrough: seed the project's starting gold (the remaining
@@ -393,6 +546,8 @@ export function startSession(
     interp,
     fade: null,
     playerRoute: null,
+    ext: cloneExtension(session.extensions, ext0 === undefined ? session.extensions.initial : ext0),
+    scene: null,
   };
 }
 
@@ -450,10 +605,15 @@ export function tableWithBodies(base: PassageTable, chars: CharsState): PassageT
   return stampBlockedCells(base, cells);
 }
 
-function motionOf(map: MapDef, sw: SwitchState, facing: Facing): Record<string, MotionType> {
+function motionOf(
+  map: MapDef,
+  sw: SwitchState,
+  facing: Facing,
+  extension: ExtensionScope,
+): Record<string, MotionType> {
   const out = keyedRecord<MotionType>();
   for (const ev of map.events ?? []) {
-    const active = activePage(ev, sw, map.id, facing);
+    const active = activePage(ev, sw, map.id, facing, extension);
     if (active) out[ev.id] = active.page.moveType ?? "static";
   }
   return out;
@@ -468,6 +628,195 @@ function eventIdOf(key: string, mapId: string): string {
 export function fadeOpacity(fade: FadeState | null): number {
   if (!fade) return 0;
   return fade.phase === "out" ? 1 - fade.left / fade.half : fade.left / fade.half;
+}
+
+const NO_MAP_INPUT: SessionInput = {
+  buttons: 0,
+  confirmEdge: false,
+  cancelEdge: false,
+  upEdge: false,
+  downEdge: false,
+};
+
+function battleInput(input: SessionInput): Readonly<BattleInput> {
+  return {
+    buttons: input.buttons >>> 0,
+    confirmEdge: input.confirmEdge === true,
+    cancelEdge: input.cancelEdge === true,
+    upEdge: input.upEdge === true,
+    downEdge: input.downEdge === true,
+  };
+}
+
+/** Consume one queued Battle Processing request. One draw
+ * from the session cursor derives an isolated u32 seed even when start()
+ * declines the encounter; no game rule may read wall time or global RNG.
+ * The caller guarantees there is no active scene; violating that invariant
+ * is an engine programming error, never a project-content path. A malformed
+ * BattleRules.start return is likewise a registered game-code contract
+ * violation and intentionally throws. */
+function startBattleScene(sess: Session, s: SessionState, request: PendingBattle): boolean {
+  if (s.scene !== null) {
+    throw new Error("battle queue invariant: cannot start while a scene is active");
+  }
+  const rules = sess.battle;
+  if (!rules) throw new Error("battle queue invariant: no BattleRules registered");
+  const draw = rngNext(s.interp.sw.rng);
+  s.interp.sw.rng = draw.next;
+  s.sw = s.interp.sw;
+  const seed = Math.floor(draw.value * 4294967296) >>> 0;
+  const started = rules.start(
+    cloneExtension(sess.extensions, s.ext),
+    deepClone(request.setup),
+    seed,
+  );
+  if (started === null) {
+    s.interp = continueExternal(s.interp, request.fiber);
+    s.sw = s.interp.sw;
+    return false;
+  }
+  if (typeof started !== "object" || Array.isArray(started)) {
+    throw new Error("battle start: BattleStart object or null required");
+  }
+  assertJsonValue(started.state, "battle start state");
+  s.ext = cloneExtension(sess.extensions, started.ext, "battle start extension state");
+  s.scene = {
+    kind: "battle",
+    fiber: request.fiber,
+    state: deepClone(started.state),
+    pausedTicks: 0,
+  };
+  return true;
+}
+
+/** Start queued requests only while the scene slot is free. Null encounters
+ * resume immediately and do not delay the next request; a real scene leaves
+ * the remaining FIFO intact for a later reference tick. A canceled parallel
+ * has no fiber to resume, so its stale request is discarded as content data
+ * rather than ever reaching the rules callback. */
+function startNextBattleScene(sess: Session, s: SessionState): void {
+  while (s.scene === null && s.interp.pendingBattles.length > 0) {
+    const request = s.interp.pendingBattles.shift()!;
+    if (!fiberIsExternal(s.interp, request.fiber)) continue;
+    if (startBattleScene(sess, s, request)) return;
+  }
+}
+
+/** Advance only the interpreter's absolute reference clock. The elapsed
+ * pause is retained on the scene and applied to relative fiber clocks on
+ * completion, leaving the fibers themselves byte-stable while frozen. */
+function tickFrozenWorld(s: SessionState): void {
+  s.interp.frame++;
+  if (s.scene) s.scene.pausedTicks++;
+  s.interp.cues = [];
+  s.interp.pendingMoveRoutes = [];
+  s.interp.pendingPlacements = [];
+  s.interp.abortedRoutes = [];
+}
+
+function completionTransfer(value: unknown): Omit<import("./interpreter.ts").PendingTransfer, "fiber"> | null {
+  if (value === undefined) return null;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("battle completion transfer must be an object");
+  }
+  const transfer = value as Record<string, unknown>;
+  if (typeof transfer.map !== "string" || transfer.map.length === 0) {
+    throw new Error("battle completion transfer.map must be a non-empty string");
+  }
+  if (!Number.isInteger(transfer.x) || (transfer.x as number) < 0 ||
+    !Number.isInteger(transfer.y) || (transfer.y as number) < 0) {
+    throw new Error("battle completion transfer coordinates must be non-negative integers");
+  }
+  const dir = transfer.dir ?? "keep";
+  if (dir !== "keep" && dir !== "down" && dir !== "left" && dir !== "up" && dir !== "right") {
+    throw new Error("battle completion transfer.dir is invalid");
+  }
+  const fade = transfer.fade ?? 0;
+  if (typeof fade !== "number" || !Number.isFinite(fade) || fade < 0) {
+    throw new Error("battle completion transfer.fade must be a non-negative finite number");
+  }
+  return {
+    map: transfer.map,
+    x: transfer.x as number,
+    y: transfer.y as number,
+    dir,
+    fadeFrames: secondsToFrames(fade, MOTION_HZ),
+  };
+}
+
+/** Advance the game-owned battle reducer once for this host frame, then
+ * atomically commit a terminal result. Result commands run before an optional
+ * completion transfer; continueBattle installs both on the parked fiber.
+ * Invalid step/done return shapes are registered BattleRules programming
+ * errors and intentionally throw; authored event operands never reach these
+ * assertions. */
+function advanceBattleScene(
+  sess: Session,
+  s: SessionState,
+  input: Readonly<BattleInput>,
+  ticks: number,
+): void {
+  const scene = s.scene;
+  const rules = sess.battle;
+  if (!scene || !rules) return;
+  if (ticks > 0) {
+    const stepped = rules.step(deepClone(scene.state), input, ticks);
+    assertJsonValue(stepped, "battle step state");
+    scene.state = deepClone(stepped);
+  }
+  const completion = rules.done(deepClone(scene.state));
+  if (completion === null) return;
+  if (typeof completion !== "object" || Array.isArray(completion)) {
+    throw new Error("battle done: BattleCompletion object or null required");
+  }
+  if (
+    completion.result !== "win" && completion.result !== "lose" &&
+    completion.result !== "escape" && completion.result !== "draw"
+  ) {
+    throw new Error("battle done: result must be win, lose, escape, or draw");
+  }
+  const nextExt = cloneExtension(sess.extensions, completion.ext, "battle completion extension state");
+  const writes: [string, string | number][] = [];
+  const switches: [string, boolean][] = [];
+  if (completion.writes !== undefined) {
+    if (completion.writes === null || typeof completion.writes !== "object" || Array.isArray(completion.writes)) {
+      throw new Error("battle completion writes must be a record");
+    }
+    for (const id of Object.keys(completion.writes)) {
+      const value = completion.writes[id];
+      if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
+        throw new Error(`battle completion write ${JSON.stringify(id)} must be a string or finite number`);
+      }
+      writes.push([id, value]);
+    }
+  }
+  if (completion.switches !== undefined) {
+    if (completion.switches === null || typeof completion.switches !== "object" || Array.isArray(completion.switches)) {
+      throw new Error("battle completion switches must be a record");
+    }
+    for (const id of Object.keys(completion.switches)) {
+      const value = completion.switches[id];
+      if (typeof value !== "boolean") {
+        throw new Error(`battle completion switch ${JSON.stringify(id)} must be a boolean`);
+      }
+      switches.push([id, value]);
+    }
+  }
+  const transfer = completionTransfer(completion.transfer);
+
+  s.ext = nextExt;
+  for (const [id, value] of writes) s.interp.sw.variables[id] = value;
+  for (const [id, value] of switches) s.interp.sw.switches[id] = value;
+  if (scene.pausedTicks > 0) {
+    const shift = (fiber: SessionState["interp"]["main"]): void => {
+      if (fiber?.mode === "wait" || fiber?.mode === "text") fiber.since += scene.pausedTicks;
+    };
+    shift(s.interp.main);
+    for (const fiber of Object.values(s.interp.parallels)) shift(fiber);
+  }
+  s.interp = continueBattle(s.interp, scene.fiber, completion.result, transfer);
+  s.sw = s.interp.sw;
+  s.scene = null;
 }
 
 /** One host virtual frame. The fold runs on the fixed MOTION_HZ reference:
@@ -507,22 +856,38 @@ export function stepSession(
             : null,
         }
       : null,
+    ext: cloneExtension(sess.extensions, s0.ext),
+    scene: cloneScene(s0.scene),
   };
   s.frame++;
   const ticks = sess.ticksPerFrame;
+  const sceneAtFrameStart = s.scene !== null;
+  let sceneStartedAt = sceneAtFrameStart ? 0 : -1;
 
   let prevCell = { x: s.move.tx, y: s.move.ty };
   for (let tick = 0; tick < ticks; tick++) {
-    const tickInput: SessionInput =
-      tick === 0
+    const tickInput: SessionInput = s.scene
+      ? NO_MAP_INPUT
+      : tick === 0
         ? input
         : { buttons: input.buttons, confirmEdge: false, cancelEdge: false, upEdge: false, downEdge: false };
+    const hadScene = s.scene !== null;
     const nextCell = stepReferenceTick(sess, s, tickInput, prevCell);
     prevCell = nextCell;
+    if (!hadScene && s.scene !== null && sceneStartedAt < 0) sceneStartedAt = tick + 1;
     // A fatalized interpreter freezes the playfield for the rest of the
     // batch (review 1274 B1): reference clock keeps advancing, the fold
     // does not.
     if (s.interp.error) break;
+  }
+  if (s.scene) {
+    const sceneTicks = sceneAtFrameStart ? ticks : Math.max(0, ticks - sceneStartedAt);
+    advanceBattleScene(
+      sess,
+      s,
+      sceneAtFrameStart ? battleInput(input) : battleInput(NO_MAP_INPUT),
+      sceneTicks,
+    );
   }
   return s;
 }
@@ -536,6 +901,21 @@ function stepReferenceTick(
   prevCellIn: { x: number; y: number },
 ): { x: number; y: number } {
   const map = sess.maps.get(s.mapId)!;
+
+  // A completion is observed after the previous host frame's reference-tick
+  // batch. Its successor therefore starts on this next reference tick, never
+  // recursively on the completion frame.
+  if (s.scene === null && s.interp.pendingBattles.length > 0) {
+    startNextBattleScene(sess, s);
+  }
+
+  // Full-screen scenes own the reference clock by default. Games that need
+  // background simulation must opt in explicitly; their newly published
+  // battle requests remain queued until the active scene completes.
+  if (s.scene !== null && !sess.sceneOptions.worldContinues) {
+    tickFrozenWorld(s);
+    return { x: s.move.tx, y: s.move.ty };
+  }
 
   // -- fade: gameplay and input freeze while the overlay moves -----------
   if (s.fade) {
@@ -564,6 +944,7 @@ function stepReferenceTick(
   //    aborts any forced route parked on it; resume the waiter so the
   //    external fiber cannot deadlock.
   const erased = new Set(Object.keys(s.interp.erased));
+  const extension: ExtensionScope = { runtime: sess.extensions, ext: s.ext };
   const synced = syncPages(
     s.chars,
     map,
@@ -572,6 +953,7 @@ function stepReferenceTick(
     erased,
     s.interp.placements,
     s.move.facing,
+    extension,
   );
   s.chars = synced.state;
   for (const waiter of synced.result.abortedWaiters) {
@@ -609,7 +991,7 @@ function stepReferenceTick(
     playerPlace,
     sess.cfg,
     locked,
-    motionOf(map, s.sw, s.move.facing),
+    motionOf(map, s.sw, s.move.facing, extension),
   );
   s.chars = stepped.state;
   for (const waiter of stepped.finishedWaiters) {
@@ -638,11 +1020,27 @@ function stepReferenceTick(
     prevFacing,
     eventCells,
   };
-  s.interp = stepInterp(world, s.interp, interpInput);
+  const steppedInterp = stepInterpWithExtensions(
+    world,
+    s.interp,
+    interpInput,
+    s.ext,
+  );
+  s.interp = steppedInterp.interp;
+  s.ext = steppedInterp.ext;
   // stepInterp clones the mutable interpreter state, so the switch bank it
   // returns is a new object; re-alias the session's top-level bank to it so
   // the values chars/motion read next tick are the ones commands just wrote.
   s.sw = s.interp.sw;
+  const transfer = s.interp.pendingTransfer;
+  if (transfer && !transferMapKnown(sess, transfer.map)) {
+    s.interp.pendingTransfer = null;
+    s.interp.error = {
+      kind: "content",
+      message: `transfer in ${transfer.fiber}: unknown map ${JSON.stringify(transfer.map)}`,
+    };
+    return { x: s.move.tx, y: s.move.ty };
+  }
 
   // A page-scoped parallel canceled this tick may have owned a waited
   // player route: drop it without resuming the dead waiter. The event-side
@@ -708,6 +1106,9 @@ function stepReferenceTick(
       s.interp = continueExternal(s.interp, placed.displacedWaiter);
     }
   }
+  if (s.scene === null && s.interp.pendingBattles.length > 0) {
+    startNextBattleScene(sess, s);
+  }
   if (s.interp.pendingTransfer) {
     const t = s.interp.pendingTransfer;
     if (t.fadeFrames > 0) {
@@ -732,6 +1133,14 @@ function applyTransfer(
   const facing: Facing = dir === "keep" ? s.move.facing : DIR_INDEX[dir];
   enterMap(s, mapId, x, y, facing, sess.cfg);
   releaseSessionMapsExcept(sess, [mapId]);
+}
+
+/** A transfer destination authored as a live variable cannot be checked at
+ * project-load time. Treat a missing id as a content error on the reducer
+ * state; repository integrity/load failures for a known id still throw at
+ * acquireSessionMap because they are deployment/configuration failures. */
+function transferMapKnown(sess: Session, mapId: string): boolean {
+  return sess.maps.has(mapId) || (sess.mapIndex?.has(mapId) ?? false);
 }
 
 // ---------------------------------------------------------------------------

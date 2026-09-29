@@ -15,11 +15,13 @@
 // by the host when restoring (MapView compares against its runtime map).
 
 import { MAX_FIBER_STACK_DEPTH } from "./interpreter.ts";
+import { extensionCallNameValid, jsonValueProblem } from "./extensions.ts";
 
 const INTEGER_OPS = new Set([
   "text", "choices", "switch", "variable", "selfSwitch", "if", "jmp",
   "wait", "gold", "item", "se", "erase", "exit", "transfer",
   "moveRoute", "common", "lockInput", "unlockInput", "place",
+  "ext", "battle",
 ]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -82,6 +84,15 @@ function validateCondition(v: unknown, path: string): string | null {
     case "facing":
       if (!["down", "left", "right", "up"].includes(v.dir as string)) {
         return fail(`${path}.dir`, "bad direction");
+      }
+      return null;
+    case "ext":
+      if (typeof v.call !== "string" || !extensionCallNameValid(v.call)) {
+        return fail(`${path}.call`, "namespaced extension call required");
+      }
+      {
+        const problem = jsonValueProblem(v.args, `${path}.args`);
+        if (problem) return problem;
       }
       return null;
     default:
@@ -152,6 +163,13 @@ function validateMoveRoute(v: unknown, path: string): string | null {
   }
   if (typeof v.repeat !== "boolean") return fail(`${path}.repeat`, "boolean required");
   if (typeof v.skippable !== "boolean") return fail(`${path}.skippable`, "boolean required");
+  return null;
+}
+
+function validateVariableRef(v: unknown, path: string): string | null {
+  if (!isRecord(v) || Object.keys(v).length !== 1 || typeof v.variable !== "string" || v.variable.length === 0) {
+    return fail(path, "{variable: non-empty string} required");
+  }
   return null;
 }
 
@@ -299,13 +317,21 @@ function validateProg(prog: unknown, path: string): string | null {
         break;
       }
       case "transfer": {
-        const e = needStr("map");
-        if (e) return e;
-        if (!isFiniteNumber(ins.x) || !isFiniteNumber(ins.y)) {
-          return fail(`${here}`, "x/y numbers required");
+        if (typeof ins.map !== "string") {
+          const e = validateVariableRef(ins.map, `${here}.map`);
+          if (e) return e;
+        }
+        if (!isFiniteNumber(ins.x)) {
+          const e = validateVariableRef(ins.x, `${here}.x`);
+          if (e) return e;
+        }
+        if (!isFiniteNumber(ins.y)) {
+          const e = validateVariableRef(ins.y, `${here}.y`);
+          if (e) return e;
         }
         if (ins.dir !== "keep" && !["down", "left", "right", "up"].includes(ins.dir as string)) {
-          return fail(`${here}.dir`, "bad direction");
+          const e = validateVariableRef(ins.dir, `${here}.dir`);
+          if (e) return e;
         }
         if (!isFiniteNumber(ins.fadeFrames)) return fail(`${here}.fadeFrames`, "number required");
         break;
@@ -326,6 +352,28 @@ function validateProg(prog: unknown, path: string): string | null {
       case "common":
         if (needStr("id")) return fail(`${here}.id`, "string required");
         break;
+      case "ext": {
+        if (typeof ins.call !== "string" || !extensionCallNameValid(ins.call)) {
+          return fail(`${here}.call`, "namespaced extension call required");
+        }
+        const problem = jsonValueProblem(ins.args, `${here}.args`);
+        if (problem) return problem;
+        break;
+      }
+      case "battle": {
+        const problem = jsonValueProblem(ins.setup, `${here}.setup`);
+        if (problem) return problem;
+        for (const branch of ["onWin", "onLose", "onEscape"] as const) {
+          if (ins[branch] !== null && !Array.isArray(ins[branch])) {
+            return fail(`${here}.${branch}`, "program array or null required");
+          }
+          if (Array.isArray(ins[branch])) {
+            const e = validateProg(ins[branch], `${here}.${branch}`);
+            if (e) return e;
+          }
+        }
+        break;
+      }
     }
   }
   return null;
@@ -420,11 +468,21 @@ function validateSwitchState(v: unknown, path: string): string | null {
     }
     return null;
   };
+  const variableRecord = (key: string): string | null => {
+    const rec = v[key];
+    if (!isRecord(rec)) return fail(`${path}.${key}`, "record required");
+    for (const [k, val] of Object.entries(rec)) {
+      if (typeof val !== "string" && !isFiniteNumber(val)) {
+        return fail(`${path}.${key}.${k}`, "string or finite number required");
+      }
+    }
+    return null;
+  };
   let e = booleanRecord("switches");
   if (e) return e;
   e = numberRecord("items");
   if (e) return e;
-  e = numberRecord("variables");
+  e = variableRecord("variables");
   if (e) return e;
   if (!isRecord(v.self)) return fail(`${path}.self`, "record required");
   for (const [k, val] of Object.entries(v.self)) {
@@ -506,6 +564,8 @@ export function validateSnapshot(snap: unknown): string | null {
     return "state.map: non-empty string required";
   }
   if (!isU32(snap.held)) return "state.held: u32 button mask required";
+  const extProblem = jsonValueProblem(snap.ext, "state.ext");
+  if (extProblem) return extProblem;
 
   // player
   const p = snap.player;
@@ -583,6 +643,9 @@ export function validateSnapshot(snap: unknown): string | null {
   }
   if (!Array.isArray(it.pendingMoveRoutes) || it.pendingMoveRoutes.length !== 0) {
     return "state.interp.pendingMoveRoutes: no parked move routes at a save point";
+  }
+  if (!Array.isArray(it.pendingBattles) || it.pendingBattles.length !== 0) {
+    return "state.interp.pendingBattles: no queued battles at a save point";
   }
   if (!Array.isArray(it.pendingPlacements) || it.pendingPlacements.length !== 0) {
     return "state.interp.pendingPlacements: no pending event placements at a save point";

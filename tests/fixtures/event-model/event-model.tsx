@@ -169,7 +169,7 @@ function EventModelFixture() {
   globalThis.__eventModelBenchMode = false;
   globalThis.__eventModelFixture = {
     state: () => state,
-    snapshot: () => encodeEnvelope(createSnapshot(state.mapId, state.move, state.interp, prevButtons)),
+    snapshot: () => encodeEnvelope(createSnapshot(state.mapId, state.move, state.interp, prevButtons, state.ext, state.scene)),
     restore: (envelope) => {
       const snap = decodeEnvelopeText(envelope);
       state = {
@@ -181,6 +181,8 @@ function EventModelFixture() {
         interp: snap.interp,
         fade: null,
         playerRoute: null,
+        ext: snap.ext,
+        scene: null,
       };
       prevButtons = snap.held;
       publish();

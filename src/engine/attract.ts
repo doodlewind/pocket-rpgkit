@@ -32,12 +32,15 @@
 
 import type { MapRepository, ProjectSource } from "./types.ts";
 import type { Modal } from "./interpreter.ts";
+import type { ExtensionOptions } from "./extensions.ts";
+import type { BattleRules } from "./battle.ts";
 import {
   acquireSessionMap,
   createSession,
   releaseSessionMapsExcept,
   startSession,
   stepSession,
+  type SceneOptions,
   type Session,
   type SessionState,
 } from "./session.ts";
@@ -122,6 +125,11 @@ export interface AttractOptions {
   /** Required when project is a ProjectShell. Repository cache residency is
    * derived and never enters the rewind timeline. */
   maps?: MapRepository;
+  /** The same pure game registrations accepted by createSession(). They live
+   * outside the rewind timeline; refolds reuse them against fresh state. */
+  extensions?: ExtensionOptions;
+  battle?: BattleRules;
+  scene?: SceneOptions;
 }
 
 export interface AttractStatus {
@@ -204,7 +212,12 @@ export class AttractController {
     this.hz = opts.hz ?? 60;
     this.attractEnabled = opts.attractEnabled ?? true;
     this.timelineHz = this.attractEnabled ? (opts.tapeHz ?? ATTRACT_TAPE_HZ) : this.hz;
-    this.session = createSession(project, this.timelineHz, opts.maps);
+    this.session = createSession(project, this.timelineHz, {
+      maps: opts.maps,
+      extensions: opts.extensions,
+      battle: opts.battle,
+      scene: opts.scene,
+    });
     this.idleFrames = opts.idleFrames ?? this.hz * 10;
     this.endHoldFrames = opts.endHoldFrames ?? this.timelineHz * 2;
     this.rewindFrames = Math.max(1, Math.round((opts.rewindSeconds ?? 3) * this.timelineHz));

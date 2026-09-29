@@ -26,9 +26,12 @@
 import type { MovementState } from "./movement.ts";
 import type { InterpState } from "./interpreter.ts";
 import { cloneInterp, isBusy } from "./interpreter.ts";
-import { keyedRecord } from "./clone.ts";
+import { deepClone, keyedRecord } from "./clone.ts";
+import { assertJsonValue, encodeExtension } from "./extensions.ts";
 import { envelopeConsistent, validateSnapshot } from "./save-validate.ts";
 import type { MapContentIdentity } from "./map-repository.ts";
+import type { JsonValue } from "./types.ts";
+import type { Session, SessionState } from "./session.ts";
 
 export const SAVE_FORMAT = "rpgkit-save/v1" as const;
 export const SAVE_VERSION = 1 as const;
@@ -48,12 +51,14 @@ export interface SaveSnapshot {
   held: number;
   /** Full interpreter state, cues drained and no request parked. */
   interp: InterpState;
+  /** Game-owned state in its encoded JSON form. Older v1 saves hydrate null. */
+  ext: JsonValue;
 }
 
 /** A save is only valid at a safe point: the mover rests on a tile and no
- *  blocking fiber / modal / external request owns the session. Parallel
- *  fibers serialize in their running state. */
-export function canSave(player: MovementState, interp: InterpState): boolean {
+ *  blocking fiber / modal / queued external request / scene owns the
+ *  session. Parallel fibers serialize in their running state. */
+export function canSave(player: MovementState, interp: InterpState, scene: unknown = null): boolean {
   return (
     !player.moving &&
     player.phase === 0 &&
@@ -63,7 +68,9 @@ export function canSave(player: MovementState, interp: InterpState): boolean {
     interp.pendingTransfer === null &&
     interp.pendingMoveRoutes.length === 0 &&
     interp.pendingPlacements.length === 0 &&
-    interp.abortedRoutes.length === 0
+    interp.abortedRoutes.length === 0 &&
+    interp.pendingBattles.length === 0 &&
+    scene === null
   );
 }
 
@@ -76,6 +83,7 @@ export function cloneSnapshot(snap: SaveSnapshot): SaveSnapshot {
     player: { ...snap.player },
     held: snap.held >>> 0,
     interp: cloneInterp(snap.interp),
+    ext: deepClone((snap as SaveSnapshot & { ext?: JsonValue }).ext ?? null),
   };
 }
 
@@ -84,19 +92,40 @@ export function createSnapshot(
   player: MovementState,
   interp: InterpState,
   held: number,
+  ext: JsonValue = null,
+  scene: unknown = null,
 ): SaveSnapshot {
-  if (!canSave(player, interp)) {
-    throw new Error("save: snapshot is only valid at a tile boundary with no modal open");
+  if (!canSave(player, interp, scene)) {
+    throw new Error("save: snapshot is only valid at a tile boundary with no modal or scene open and no external work pending");
   }
-  return normalizeInterp(cloneSnapshot({ map, player, held, interp }));
+  assertJsonValue(ext, "save extension state");
+  return normalizeInterp(cloneSnapshot({ map, player, held, interp, ext }));
 }
 
-/** Drop between-frame transient fields: cues drain after every step and
- *  pending* requests live only on the step that issued them. */
+/** Session-aware save entry point. It applies the registered extension
+ * codec and rejects active scenes before constructing the checksum payload. */
+export function createSessionSnapshot(
+  session: Session,
+  state: SessionState,
+  held: number,
+): SaveSnapshot {
+  return createSnapshot(
+    state.mapId,
+    state.move,
+    state.interp,
+    held,
+    encodeExtension(session.extensions, state.ext),
+    state.scene,
+  );
+}
+
+/** Drop between-frame transient fields. The battle queue is persistent at
+ * runtime, but can only be empty at the safe point checked above. */
 function normalizeInterp(snap: SaveSnapshot): SaveSnapshot {
   snap.interp.cues = [];
   snap.interp.pendingTransfer = null;
   snap.interp.pendingMoveRoutes = [];
+  snap.interp.pendingBattles = [];
   snap.interp.pendingPlacements = [];
   snap.interp.abortedRoutes = [];
   return snap;
@@ -375,10 +404,18 @@ function hydrateLegacyV1(snapshot: SaveSnapshot): void {
     inputLocked?: boolean;
     placements?: InterpState["placements"];
     pendingPlacements?: InterpState["pendingPlacements"];
+    pendingBattles?: InterpState["pendingBattles"];
+    pendingBattle?: InterpState["pendingBattles"][number] | null;
   };
   if (interp.inputLocked === undefined) interp.inputLocked = false;
   if (interp.placements === undefined) interp.placements = keyedRecord();
   if (interp.pendingPlacements === undefined) interp.pendingPlacements = [];
+  if (interp.pendingBattles === undefined) {
+    interp.pendingBattles = interp.pendingBattle === undefined || interp.pendingBattle === null
+      ? []
+      : [interp.pendingBattle];
+  }
+  if ((snapshot as SaveSnapshot & { ext?: JsonValue }).ext === undefined) snapshot.ext = null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
