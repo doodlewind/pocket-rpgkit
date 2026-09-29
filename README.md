@@ -27,7 +27,9 @@ the parts an RPG-Maker-style game needs without any specific game:
 - **the format** (`src/data/schema.json`, v1; changes recorded in
   `src/data/CHANGELOG.md`);
 - **three examples** (`examples/`), each a PocketJS app with its own art
-  and tests on the wasm sim host (below).
+  and tests on the wasm sim host (below);
+- **a tile-map editor, in preview** (`editor/`): paints the examples'
+  documents on the desktop host ([below](#editor-preview)).
 
 ## Examples
 
@@ -63,8 +65,8 @@ cd pocket-rpgkit
 bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
-bun run build:example    # build meadow, sunstone, grow + test fixtures into dist/
-bun test                 # 446 tests incl. sim journeys and pixel goldens
+bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
+bun test                 # 496 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, meadow; needs a Rust toolchain)
@@ -81,8 +83,53 @@ Anyway). A game that vendors this kit packages itself with
 (`--name`, `--icon <png>`, `--icon-crop x,y,w,h` to taste).
 
 `bun run build:example sunstone` builds one example. `bun run gen-assets`
-regenerates every example's baked art from its `assets/src/`; the cookers
-are deterministic and reproduce the committed PNGs byte for byte.
+regenerates every example's baked art from its `assets/src/` (and then the
+editor's tile cells from those sheets); the cookers are deterministic and
+reproduce the committed PNGs byte for byte.
+
+## Editor (preview)
+
+`editor/` is a tile-map editor for `rpgkit-project/v1` documents, a
+PocketJS app on the desktop host. It opens the Sunstone and Meadow
+documents (`examples/*/data/*.json`) and paints them with those examples'
+own Kenney tile sheets.
+
+What it does today:
+
+- paint ground tiles by click or drag; a **LAYER** toggle paints the
+  sparse upper (star) layer instead; right click or shift+click erases;
+- undo/redo, one step per stroke, 64 steps deep (header buttons or
+  Cmd+Z / Cmd+Shift+Z);
+- switch between a document's maps; the palette shows the sheets the
+  current map declares;
+- save through the schema validator (`src/data/schema.json`): an invalid
+  export is refused with its first error, an unedited one saves back byte
+  for byte;
+- draw every event as a marker on its cell.
+
+Not yet: editing events (placing, moving, pages, commands), passage
+overrides, map properties, or creating maps. The grow example's generated
+settlement is not wired in: its sheet is synthesized by its cooker rather
+than cut from a source PNG.
+
+```sh
+bun run editor                    # Sunstone (examples/sunstone/data/sunstone.json)
+bun run editor meadow             # Meadow (examples/meadow/data/meadow.json)
+bun run editor sunstone --file my-map.json   # edit a copy (seeded if missing)
+bun run editor --build-only       # bundle + release host, no window
+```
+
+The launcher builds `dist/<target>/editor.{js,pak}` and the Rust host,
+then opens the window with the `rpgkit-editor` companion and `--file`: the
+host forwards the real mouse and keyboard and writes each save to that
+file. The example games still build their projects from code, and
+`bun run gen-assets` rewrites `data/*.json` from that code, so keep edits
+you care about in a copy (`--file`). Without the companion (the wasm sim,
+a browser) the editor runs from buttons behind a visible banner.
+`bun run build:editor` builds the sim bundle alone; the editor's tests are
+`tests/editor-model.test.ts` and `tests/editor-sim.test.ts`. More in
+[`editor/README.md`](editor/README.md); the tile art's licenses are in the
+examples' `ATTRIBUTION.md` files.
 
 ## The format in one screen
 
@@ -237,13 +284,8 @@ src/data/        schema.json (normative) + CHANGELOG
 src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu,
                  Panel, theme (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
-tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts)
-tools/           example build, desktop launcher, macOS packager
-examples/        meadow (minimal), sunstone (game + attract), grow (demo);
-                 each has its entry, data, assets/src, gen-assets.ts,
-                 images.json, pocket.json and ATTRIBUTION.md
-tests/           unit suites, sim suites, goldens/, fixtures/ (small
-                 apps the sim suites boot, built by build:example)
+bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
+bun test                 # 496 tests incl. sim journeys and pixel goldens
 vendor/pocketjs  pinned PocketJS submodule
 ```
 
@@ -252,4 +294,5 @@ vendor/pocketjs  pinned PocketJS submodule
 MIT (`LICENSE`). Example art: Kenney Tiny Town and Tiny Dungeon (CC0 1.0),
 Pixel-Boy and AAA's Ninja Adventure (CC0 1.0), and Lanea Zimmerman
 (Sharm) Tiny 16 (**CC-BY 3.0**, attribution required) — see each
-example's `ATTRIBUTION.md`.
+example's `ATTRIBUTION.md`. The editor's tile cells are cut from the
+Sunstone example's Kenney sheets (CC0).
