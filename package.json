@@ -26,7 +26,8 @@
     "check": "bun test && bunx tsc --noEmit",
     "desktop": "bun tools/desktop.ts",
     "package:macos": "bun tools/package-macos.ts",
-    "editor": "bun tools/editor.ts"
+    "editor": "bun tools/editor.ts",
+    "web": "bun tools/web.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
