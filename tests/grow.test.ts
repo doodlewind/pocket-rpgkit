@@ -252,6 +252,65 @@ describe("grow: timeline seek", () => {
     for (let i = 1; i < xs.length; i++) expect(xs[i]!).toBeGreaterThanOrEqual(xs[i - 1]!);
   });
 
+  test("the coalesced delta between any two ticks turns one state into the other", () => {
+    const timeline = new GrowTimeline(DEFAULT_PARAMS);
+    const total = timeline.finish();
+    const grids = (k: number) => {
+      const s = timeline.at(k);
+      // at() reuses one cursor; keep this tick's cells.
+      return { ground: s.ground.slice(), upper: s.upper.slice() };
+    };
+    const states = Array.from({ length: total + 1 }, (_, k) => grids(k));
+    const editedIn = (a: number, b: number) => {
+      const edited = new Set<number>();
+      for (let t = Math.min(a, b) + 1; t <= Math.max(a, b); t++) {
+        for (const edit of timeline.snapshot(t)!.edits) if (edit.layer !== "road") edited.add(edit.index);
+      }
+      return edited;
+    };
+    let seed = 0x5eed;
+    const next = () => { seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0; return seed % (total + 1); };
+    const pairs: [number, number][] = [[0, total], [total, 0], [37, 37], [0, 1], [1, 0]];
+    for (let i = 0; i < 120; i++) pairs.push([next(), next()]);
+    const changed: number[] = [];
+    const groundOnly: number[] = [];
+    for (const [a, b] of pairs) {
+      expect(timeline.changedCells(a, b, "ground+upper", changed)).toBe(true);
+      expect(timeline.changedCells(a, b, "ground", groundOnly)).toBe(true);
+      const set = new Set(changed);
+      // Each changed cell once, and only cells some tick in the span edited.
+      expect(set.size).toBe(changed.length);
+      const edited = editedIn(a, b);
+      expect(set).toEqual(edited);
+      const from = states[a]!, to = states[b]!;
+      // Copying just those cells from b's layers onto a's yields b exactly.
+      const ground = from.ground.slice(), upper = from.upper.slice();
+      for (const index of changed) { ground[index] = to.ground[index]!; upper[index] = to.upper[index]!; }
+      expect(ground).toEqual(to.ground);
+      expect(upper).toEqual(to.upper);
+      // The ground-only delta covers every ground difference, inside the full one.
+      const groundSet = new Set(groundOnly);
+      for (const index of groundOnly) expect(set.has(index)).toBe(true);
+      for (let i = 0; i < from.ground.length; i++) {
+        if (from.ground[i] !== to.ground[i]) expect(groundSet.has(i)).toBe(true);
+      }
+      // Direction does not matter.
+      const back: number[] = [];
+      timeline.changedCells(b, a, "ground+upper", back);
+      expect(new Set(back)).toEqual(set);
+    }
+  }, 30_000);
+
+  test("the coalesced delta refuses a span that is not recorded yet", () => {
+    const timeline = new GrowTimeline(DEFAULT_PARAMS);
+    const out = [1, 2, 3];
+    expect(timeline.changedCells(0, 40, "ground+upper", out)).toBe(false);
+    expect(out).toEqual([]);
+    timeline.prefillTo(40);
+    expect(timeline.changedCells(40, 0, "ground+upper", out)).toBe(true);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
   test("every tick between 0 and done is reachable and monotone", () => {
     const done = growToDone(DEFAULT_PARAMS);
     let s = createGrow();

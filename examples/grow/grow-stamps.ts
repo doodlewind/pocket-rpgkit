@@ -110,6 +110,11 @@ export function stampCell(key: string, dx: number, dy: number): number {
   return s.base + dy * s.w + dx;
 }
 
+/** The stamp a cell id belongs to, without allocating (hot view paths). */
+export function stampOwner(cell: number): Stamp | undefined {
+  return cell >= STAMP_BASE ? OWNER[cell] : undefined;
+}
+
 /** The stamp a cell id belongs to, and the part's offset inside it. */
 export function stampOfCell(cell: number): { stamp: Stamp; dx: number; dy: number } | undefined {
   const s = cell >= STAMP_BASE ? OWNER[cell] : undefined;

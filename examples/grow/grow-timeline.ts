@@ -50,6 +50,8 @@ export class GrowTimeline {
   readonly #hashes = new WeakMap<GrowState, string>();
   #builder: GrowState;
   #cursor: GrowState | undefined;
+  #marks: Uint16Array | undefined;
+  #markEpoch = 0;
   #stepCalls = 0;
   #seeks = 0;
 
@@ -133,6 +135,36 @@ export class GrowTimeline {
   snapshot(tick: number): GrowTimelineSnapshot | undefined {
     const record = this.#records[Math.max(0, Math.round(tick))];
     return record ? { tick: record.state.tick, state: record.state, edits: record.edits, gridHash: record.gridHash } : undefined;
+  }
+
+  /**
+   * Fill `out` with every cell index whose `layers` changed on the way from
+   * tick `from` to tick `to` (either direction), each index once. Returns
+   * false, leaving `out` empty, when that span is not materialized yet.
+   */
+  changedCells(from: number, to: number, layers: "ground" | "ground+upper", out: number[]): boolean {
+    out.length = 0;
+    const first = Math.max(0, Math.min(from, to)) + 1;
+    const last = Math.max(from, to);
+    if (last >= this.#records.length) return false;
+    const size = this.params.width * this.params.height;
+    if (!this.#marks || this.#marks.length !== size) this.#marks = new Uint16Array(size);
+    const marks = this.#marks;
+    // One mark generation per call; wrapping restarts from a cleared array.
+    if (++this.#markEpoch === 0x1_0000) { marks.fill(0); this.#markEpoch = 1; }
+    const epoch = this.#markEpoch;
+    const groundOnly = layers === "ground";
+    for (let tick = first; tick <= last; tick++) {
+      const edits = this.#records[tick]!.edits;
+      for (let i = 0; i < edits.length; i++) {
+        const edit = edits[i]!;
+        if (edit.layer === "road" || (groundOnly && edit.layer !== "ground")) continue;
+        if (marks[edit.index] === epoch) continue;
+        marks[edit.index] = epoch;
+        out.push(edit.index);
+      }
+    }
+    return true;
   }
 
   /** Materialize history and return its terminal tick without moving a cursor. */

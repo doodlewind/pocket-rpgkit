@@ -10,7 +10,7 @@
 
 import { rngNext } from "../../src/engine/interpreter.ts";
 import type { MoveStep } from "../../src/engine/types.ts";
-import { HOUSE_STAMPS, STAMPS, stampCell, stampOfCell } from "./grow-stamps.ts";
+import { HOUSE_STAMPS, STAMPS, stampCell, stampOfCell, stampOwner } from "./grow-stamps.ts";
 
 export type Dir4 = 0 | 1 | 2 | 3;
 export const DX = [0, -1, 0, 1] as const;
@@ -313,15 +313,20 @@ export function naturalStampAt(p: GrowParams, x: number, y: number): { x: number
 /** Natural art still visible in a state. Authored development wins, and a
  *  multi-cell stamp disappears whole rather than being cut by a road. */
 export function wildernessTileAt(s: GrowState, x: number, y: number): number {
-  if (x < 0 || y < 0 || x >= s.params.width || y >= s.params.height) return 0;
-  const i = y * s.params.width + x;
+  const w = s.params.width;
+  if (x < 0 || y < 0 || x >= w || y >= s.params.height) return 0;
+  const i = y * w + x;
   if (s.ground[i]! >= 0 || s.upper[i]! >= 0 || s.road[i]) return 0;
   const natural = naturalTileAt(s.params, x, y);
   if (!natural) return 0;
-  const whole = naturalStampAt(s.params, x, y);
-  if (whole) {
-    for (let dy = 0; dy < whole.h; dy++) for (let dx = 0; dx < whole.w; dx++) {
-      const at = (whole.y + dy) * s.params.width + whole.x + dx;
+  // naturalStampAt without its allocations: the view asks this for every
+  // newly visible cell of a timeline jump.
+  const owner = stampOwner(natural);
+  if (owner && owner.w * owner.h > 1) {
+    const part = natural - owner.base;
+    const x0 = x - part % owner.w, y0 = y - Math.floor(part / owner.w);
+    for (let dy = 0; dy < owner.h; dy++) for (let dx = 0; dx < owner.w; dx++) {
+      const at = (y0 + dy) * w + x0 + dx;
       if (s.ground[at]! >= 0 || s.upper[at]! >= 0 || s.road[at]) return 0;
     }
   }

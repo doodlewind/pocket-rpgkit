@@ -249,6 +249,59 @@ simDescribe("D3 scrub — touch seeks the timeline", () => {
     expect(maxFrameUnmounts).toBeLessThanOrEqual(450);
   });
 
+  // Jumps hand departing image nodes to arriving cells and park the rest
+  // without a texture. Whatever sequence of jumps led there, the frame must
+  // be the one live growth draws when paused on the same action boundary.
+  for (const [width, height, target] of [[960, 544, 90], [480, 272, 37]] as const) {
+    test(`recycled jump nodes draw the paused live frame (${width}x${height}, tick ${target})`, async () => {
+      const incoming: string[] = [];
+      let created = 0, destroyed = 0;
+      const jumper = (await bootWorld(appBundle("grow"), 60, undefined, (ops) => {
+        ops.svcPoll = () => incoming.splice(0).join("\n") || undefined;
+        const createNode = ops.createNode as (...args: unknown[]) => unknown;
+        const destroyNode = ops.destroyNode as (...args: unknown[]) => unknown;
+        ops.createNode = (...args: unknown[]) => { created++; return createNode(...args); };
+        ops.destroyNode = (...args: unknown[]) => { destroyed++; return destroyNode(...args); };
+      }, { width, height })) as unknown as SimWorld;
+      for (let f = 0; f < DONE_FRAME + 2; f++) { jumper.frame(0); jumper.tick(); }
+      expect(pub().tick).toBe(TOTAL);
+      // A click on the strip: press and release land in one frame.
+      const jump = (tick: number) => {
+        const x = (tick / TOTAL) * width;
+        incoming.push(JSON.stringify({ t: "mouse", x, y: height - 8, d: true }));
+        incoming.push(JSON.stringify({ t: "mouse", x, y: height - 8, d: false }));
+        jumper.frame(0); jumper.tick();
+        expect(pub().tick).toBe(tick);
+      };
+      const tour = [0, 140, 20, TOTAL, 64, 3, 120, target];
+      for (const tick of tour) jump(tick);
+      // Every scene of the tour has been shown once, so a second tour finds
+      // a parked node for every cell: no node is created or destroyed.
+      created = 0; destroyed = 0;
+      for (const tick of tour) jump(tick);
+      expect({ created, destroyed }).toEqual({ created: 0, destroyed: 0 });
+      jumper.frame(0); jumper.tick();
+      const jumped = jumper.render().slice();
+      const jumpedPub = { ...pub() };
+
+      // Live growth paused with TRIANGLE on the frame the target action lands.
+      const live = await boot(width, height);
+      for (let f = 0; f < target * PERIOD; f++) { live.frame(0); live.tick(); }
+      live.frame(BTN.TRIANGLE); live.tick();
+      live.frame(0); live.tick();
+      const paused = pub();
+      expect(paused.auto).toBe(false);
+      expect(paused.tick).toBe(target);
+      expect(jumpedPub).toMatchObject({
+        tick: paused.tick, cameraX: paused.cameraX, hash: paused.hash, mounted: paused.mounted,
+      });
+      const frame = live.render();
+      let differing = 0;
+      for (let i = 0; i < frame.length; i++) if (frame[i] !== jumped[i]) differing++;
+      expect(differing).toBe(0);
+    }, 30_000);
+  }
+
   test("a held contact scrubs to its x tick and pauses growth", async () => {
     const w = await boot();
     // Let it grow a little first.

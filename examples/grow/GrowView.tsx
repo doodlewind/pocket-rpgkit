@@ -41,11 +41,118 @@ const NEXT_SEED = 0x9e37_79b9;
 const DEFAULT_TOTAL_TICKS = 156;
 const PREFILL_TICKS_PER_FRAME = 2;
 const TERRAIN_BLOCK_TILES = 16;
+const CELL_CLASS = "absolute w-[16] h-[16]";
 
 type Mode = "grow" | "play";
 interface OverlayCell { key: string; x: number; y: number; src: string; w?: number; h?: number }
 interface Viewport { w: number; h: number }
 interface TileBounds { x0: number; x1: number; y0: number; y1: number }
+
+interface CellStyle { posType: number; insetL: number; insetT: number }
+/** One image node at tile (x, y) of its layer. */
+interface MountedCell { node: NodeMirror; src: string; x: number; y: number; style: CellStyle }
+
+/** Inline position of an image at tile (x, y); its class sizes it. */
+function cellStyle(x: number, y: number): CellStyle {
+  return { posType: 1, insetL: x * TILE, insetT: y * TILE };
+}
+
+/**
+ * The image nodes of one cell layer. Without recycling, a cell leaving
+ * the layer detaches its node and an arriving cell creates one; auto-growth
+ * works that way while the camera scrolls. A timeline jump can replace every
+ * visible cell in one frame, so while scrubbing a departing node is handed to
+ * an arriving cell instead (new insets, maybe a new texture). Nodes still
+ * unclaimed when the sync ends stay attached with no texture for the next
+ * jump. Nodes are created only when none is spare or idle, so the pool
+ * never holds more than the most cells the layer has shown at once.
+ */
+class CellNodes {
+  readonly #root: NodeMirror;
+  readonly #name: string;
+  readonly #idleName: string;
+  readonly #klass: string;
+  // Released during the current sync; still attached and showing old art.
+  readonly #spare: MountedCell[] = [];
+  // Attached with the texture cleared, waiting for a later sync.
+  readonly #idle: MountedCell[] = [];
+  #recycling = false;
+
+  constructor(root: NodeMirror, name: string, klass: string) {
+    this.#root = root;
+    this.#name = name;
+    this.#idleName = `${name}-idle`;
+    this.#klass = klass;
+  }
+
+  begin(recycling: boolean): void { this.#recycling = recycling; }
+
+  release(cell: MountedCell): void {
+    if (this.#recycling) this.#spare.push(cell);
+    else detachNode(this.#root, cell.node);
+  }
+
+  place(x: number, y: number, src: string): MountedCell {
+    const spare = this.#spare.pop();
+    const idle = spare ? undefined : this.#idle.pop();
+    const reused = spare ?? idle;
+    if (reused) {
+      this.move(reused, x, y);
+      this.setSrc(reused, src);
+      if (idle) setProp(reused.node, "debugName", this.#name);
+      return reused;
+    }
+    const node = createElement("image");
+    const style = cellStyle(x, y);
+    setProp(node, "class", this.#klass);
+    setProp(node, "style", style);
+    setProp(node, "src", src);
+    setProp(node, "debugName", this.#name);
+    insertNode(this.#root, node);
+    return { node, src, x, y, style };
+  }
+
+  move(cell: MountedCell, x: number, y: number): void {
+    if (cell.x === x && cell.y === y) return;
+    const style = cellStyle(x, y);
+    setProp(cell.node, "style", style, cell.style);
+    cell.style = style; cell.x = x; cell.y = y;
+  }
+
+  setSrc(cell: MountedCell, src: string): void {
+    if (cell.src === src) return;
+    setProp(cell.node, "src", src, cell.src);
+    cell.src = src;
+  }
+
+  end(): void {
+    for (const cell of this.#spare) this.#retire(cell);
+    this.#spare.length = 0;
+    this.#recycling = false;
+  }
+
+  #retire(cell: MountedCell): void {
+    if (!this.#recycling) { detachNode(this.#root, cell.node); return; }
+    this.setSrc(cell, "");
+    setProp(cell.node, "debugName", this.#idleName);
+    this.#idle.push(cell);
+  }
+
+  /** Detach every pooled node (the caller detaches its mounted cells). */
+  clear(): void {
+    for (const cell of this.#spare) detachNode(this.#root, cell.node);
+    for (const cell of this.#idle) detachNode(this.#root, cell.node);
+    this.#spare.length = 0;
+    this.#idle.length = 0;
+  }
+}
+
+function layerRoot(name: string, width: number, height: number): NodeMirror {
+  const root = createElement("view");
+  setProp(root, "style", { posType: 1, insetL: 0, insetT: 0, width, height });
+  setProp(root, "debugName", name);
+  return root;
+}
 
 function SparseGridLayer(props: {
   state: () => GrowState;
@@ -55,16 +162,15 @@ function SparseGridLayer(props: {
   mode: () => Mode;
   timeline: () => GrowTimeline;
   layer: "ground" | "upper";
+  /** Hand departing cell nodes to arriving cells (timeline scrubbing). */
+  recycle: () => boolean;
   onMounted: (count: number) => void;
 }) {
-  const root = createElement("view");
-  setProp(root, "style", {
-    posType: 1, insetL: 0, insetT: 0,
-    width: props.state().params.width * TILE,
-    height: props.renderedRows() * TILE,
-  });
-  setProp(root, "debugName", `rpgkit-grow-${props.layer}-layer`);
-  const nodes = new Map<number, { node: NodeMirror; src: string; x: number; y: number }>();
+  const root = layerRoot(`rpgkit-grow-${props.layer}-layer`,
+    props.state().params.width * TILE, props.renderedRows() * TILE);
+  const pool = new CellNodes(root, `rpgkit-grow-${props.layer === "ground" ? "gcell" : "ucell"}`, CELL_CLASS);
+  const nodes = new Map<number, MountedCell>();
+  const changed: number[] = [];
   let previous: { seed: number; tick: number; mode: Mode; offset: number; bounds: TileBounds } | undefined;
 
   const sourceAt = (s: GrowState, x: number, y: number, offset: number): string | undefined => {
@@ -90,27 +196,22 @@ function SparseGridLayer(props: {
     const src = sourceAt(s, x, y, offset);
     const mounted = nodes.get(key);
     if (!src) {
-      if (mounted) { detachNode(root, mounted.node); nodes.delete(key); }
+      if (mounted) { nodes.delete(key); pool.release(mounted); }
       return;
     }
-    if (mounted) {
-      if (mounted.src !== src) {
-        setProp(mounted.node, "src", src, mounted.src);
-        mounted.src = src;
-      }
-      return;
-    }
-    const node = createElement("image");
-    setProp(node, "style", { posType: 1, insetL: x * TILE, insetT: y * TILE, width: TILE, height: TILE });
-    setProp(node, "src", src);
-    setProp(node, "debugName", `rpgkit-grow-${props.layer === "ground" ? "gcell" : "ucell"}`);
-    insertNode(root, node);
-    nodes.set(key, { node, src, x, y });
+    if (mounted) pool.setSrc(mounted, src);
+    else nodes.set(key, pool.place(x, y, src));
   };
   const syncAll = (s: GrowState, b: TileBounds, offset: number): void => {
     for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) syncCell(s, b, offset, x, y);
   };
-
+  // Every rendered row that shows authored row `authoredY`: ground cells
+  // exist only on the authored rows, upper wilderness repeats outside them.
+  const syncAuthored = (s: GrowState, b: TileBounds, offset: number, x: number, authoredY: number): void => {
+    if (props.layer === "ground") { syncCell(s, b, offset, x, authoredY + offset); return; }
+    const h = s.params.height;
+    for (let y = b.y0 + ((((authoredY + offset - b.y0) % h) + h) % h); y <= b.y1; y += h) syncCell(s, b, offset, x, y);
+  };
   const sync = (): void => {
     const s = props.state();
     const b = props.bounds();
@@ -121,53 +222,65 @@ function SparseGridLayer(props: {
       && previous.bounds.x0 === b.x0 && previous.bounds.x1 === b.x1
       && previous.bounds.y0 === b.y0 && previous.bounds.y1 === b.y1) return;
 
+    const reset = !previous || previous.seed !== s.params.seed
+      || previous.mode !== mode || previous.offset !== offset;
+    if (reset) pool.clear();
+    pool.begin(!reset && props.recycle());
     for (const [key, mounted] of nodes) {
-      if (mounted.x < b.x0 || mounted.x > b.x1 || mounted.y < b.y0 || mounted.y > b.y1) {
-        detachNode(root, mounted.node);
+      if (reset || mounted.x < b.x0 || mounted.x > b.x1 || mounted.y < b.y0 || mounted.y > b.y1) {
         nodes.delete(key);
+        pool.release(mounted);
       }
     }
 
-    const reset = !previous || previous.seed !== s.params.seed
-      || previous.mode !== mode || previous.offset !== offset;
     if (reset) {
-      for (const mounted of nodes.values()) detachNode(root, mounted.node);
-      nodes.clear();
       syncAll(s, b, offset);
     } else if (previous) {
+      // Only cells visible before and after keep their nodes as they are.
+      const kept: TileBounds = {
+        x0: Math.max(b.x0, previous.bounds.x0), x1: Math.min(b.x1, previous.bounds.x1),
+        y0: Math.max(b.y0, previous.bounds.y0), y1: Math.min(b.y1, previous.bounds.y1),
+      };
+      const overlap = kept.x0 <= kept.x1 && kept.y0 <= kept.y1;
       // A camera move evaluates only newly visible rows/columns. Existing
       // cells keep their nodes and texture bindings.
       for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) {
         if (!inside(previous.bounds, x, y)) syncCell(s, b, offset, x, y);
       }
-      // A timeline jump evaluates only cells whose authored layers changed
-      // between the two ticks, in either direction.
-      if (s.tick !== previous.tick && mode === "grow") {
-        const first = Math.min(s.tick, previous.tick) + 1;
-        const last = Math.max(s.tick, previous.tick);
-        let complete = true;
-        for (let tick = first; tick <= last; tick++) {
-          const snapshot = props.timeline().snapshot(tick);
-          if (!snapshot) { complete = false; break; }
-          for (const edit of snapshot.edits) {
-            if (props.layer === "ground" && edit.layer !== "ground") continue;
-            if (props.layer === "upper" && edit.layer === "road") continue;
-            const x = edit.index % s.params.width;
-            const y = Math.floor(edit.index / s.params.width) + offset;
-            syncCell(s, b, offset, x, y);
-            // One edited tile can clear a complete two-by-three tree silhouette.
+      // A timeline jump re-evaluates the cells whose authored layers changed
+      // between the two ticks, in either direction, each cell once however
+      // many ticks it changed in. Only kept cells can be stale; the loop
+      // above just evaluated every newly visible one.
+      if (s.tick !== previous.tick && mode === "grow" && overlap) {
+        const layers = props.layer === "ground" ? "ground" : "ground+upper";
+        if (!props.timeline().changedCells(previous.tick, s.tick, layers, changed)) {
+          syncAll(s, kept, offset);
+        } else {
+          const w = s.params.width;
+          // Natural stamps are at most two cells wide, so an edit more than
+          // one column outside the kept window cannot reach one of its cells.
+          const x0 = kept.x0 - 1, x1 = kept.x1 + 1;
+          for (let i = 0; i < changed.length; i++) {
+            const index = changed[i]!;
+            const x = index % w;
+            if (x < x0 || x > x1) continue;
+            const authoredY = (index - x) / w;
+            syncAuthored(s, kept, offset, x, authoredY);
+            // One edited tile can clear a complete natural stamp silhouette.
             // Refresh those art neighbors without changing timeline storage.
             if (props.layer === "upper") {
-              const whole = naturalStampAt(s.params, x, y - offset);
+              const whole = naturalStampAt(s.params, x, authoredY);
               if (whole) {
-                for (let dy = 0; dy < whole.h; dy++) for (let dx = 0; dx < whole.w; dx++) syncCell(s, b, offset, whole.x + dx, whole.y + offset + dy);
+                for (let dy = 0; dy < whole.h; dy++) for (let dx = 0; dx < whole.w; dx++) {
+                  syncAuthored(s, kept, offset, whole.x + dx, whole.y + dy);
+                }
               }
             }
           }
         }
-        if (!complete) syncAll(s, b, offset);
       }
     }
+    pool.end();
     previous = { seed: s.params.seed, tick: s.tick, mode, offset, bounds: { ...b } };
     props.onMounted(nodes.size);
   };
@@ -177,6 +290,50 @@ function SparseGridLayer(props: {
   onCleanup(() => {
     for (const mounted of nodes.values()) detachNode(root, mounted.node);
     nodes.clear();
+    pool.clear();
+  });
+  return root as unknown as ReturnType<typeof View>;
+}
+
+/** A keyed list of overlay images (terrain blocks and seams, villagers). */
+function OverlayCellLayer(props: {
+  cells: () => readonly OverlayCell[];
+  name: string;
+  cellName: string;
+  /** Utility class that sizes each image. */
+  klass: string;
+  width: number;
+  height: number;
+  recycle: () => boolean;
+}) {
+  const root = layerRoot(props.name, props.width, props.height);
+  const pool = new CellNodes(root, props.cellName, props.klass);
+  const nodes = new Map<string, MountedCell>();
+  let shown: readonly OverlayCell[] | undefined;
+  const sync = (): void => {
+    const cells = props.cells();
+    if (cells === shown) return;
+    shown = cells;
+    const wanted = new Map<string, OverlayCell>();
+    for (const cell of cells) wanted.set(cell.key, cell);
+    pool.begin(props.recycle());
+    for (const [key, mounted] of nodes) {
+      if (!wanted.has(key)) { nodes.delete(key); pool.release(mounted); }
+    }
+    for (const cell of cells) {
+      const mounted = nodes.get(cell.key);
+      if (!mounted) { nodes.set(cell.key, pool.place(cell.x, cell.y, cell.src)); continue; }
+      pool.move(mounted, cell.x, cell.y);
+      pool.setSrc(mounted, cell.src);
+    }
+    pool.end();
+  };
+  sync();
+  onFrame(sync);
+  onCleanup(() => {
+    for (const mounted of nodes.values()) detachNode(root, mounted.node);
+    nodes.clear();
+    pool.clear();
   });
   return root as unknown as ReturnType<typeof View>;
 }
@@ -342,6 +499,9 @@ export function GrowView() {
     };
   };
 
+  // Paused on the timeline (a scrub, or a finished growth): cell layers hand
+  // departing nodes to arriving cells instead of destroying and creating them.
+  const scrubbing = () => mode === "grow" && !auto;
   const itemFor = (key: string, x: number, y: number, src: string): OverlayCell => {
     const old = itemCache.get(key);
     if (old?.src === src) return old;
@@ -497,14 +657,14 @@ export function GrowView() {
   return <View class="w-full h-full overflow-hidden bg-black">
     <View class="absolute overflow-hidden" style={{ posType: 1, insetL: 0, insetT: 0, width: viewport().w, height: viewport().h }} debugName="rpgkit-grow-frame">
       <View class="absolute" style={{ posType: 1, insetL: worldX(), insetT: worldY() }} debugName="rpgkit-grow-camera">
-        <For each={visibleTerrainBlocks()}>{(c) => <Image src={c.src} class="absolute w-[256] h-[256]" style={{ posType: 1, insetL: c.x * TILE, insetT: c.y * TILE }} debugName="rpgkit-grow-terrain-block" />}</For>
-        <For each={visibleTerrainSeams()}>{(c) => <Image src={c.src} class="absolute w-[16] h-[16]" style={{ posType: 1, insetL: c.x * TILE, insetT: c.y * TILE }} debugName="rpgkit-grow-terrain-seam" />}</For>
-        <SparseGridLayer state={active} bounds={visibleBounds} rowOffset={authoredRowOffset} renderedRows={renderedRows} mode={modeSig} timeline={() => timeline} layer="ground" onMounted={(count) => { groundMounted = count; refreshMounted(); publish(); }} />
-        <For each={visibleVillagers()}>{(c) => <Image src={c.src} class="absolute w-[16] h-[16]" style={{ posType: 1, insetL: c.x * TILE, insetT: c.y * TILE }} debugName="rpgkit-grow-gvillager" />}</For>
+        <OverlayCellLayer cells={visibleTerrainBlocks} name="rpgkit-grow-block-layer" cellName="rpgkit-grow-terrain-block" klass="absolute w-[256] h-[256]" width={params.width * TILE} height={renderedRows() * TILE} recycle={scrubbing} />
+        <OverlayCellLayer cells={visibleTerrainSeams} name="rpgkit-grow-seam-layer" cellName="rpgkit-grow-terrain-seam" klass={CELL_CLASS} width={params.width * TILE} height={renderedRows() * TILE} recycle={scrubbing} />
+        <SparseGridLayer state={active} bounds={visibleBounds} rowOffset={authoredRowOffset} renderedRows={renderedRows} mode={modeSig} timeline={() => timeline} layer="ground" recycle={scrubbing} onMounted={(count) => { groundMounted = count; refreshMounted(); publish(); }} />
+        <OverlayCellLayer cells={visibleVillagers} name="rpgkit-grow-villager-layer" cellName="rpgkit-grow-gvillager" klass={CELL_CLASS} width={params.width * TILE} height={renderedRows() * TILE} recycle={scrubbing} />
         <Show when={playEpoch() > 0 && modeSig() === "play"} keyed>
           <PlayLayer project={playProject()!} hz={hz} viewport={viewport} onCamera={(x, y) => { setPlayCamX(x); setPlayCamY(y); }} onBack={backToGrow} onModal={setPlayModal} onNotice={setPlayNotice} />
         </Show>
-        <SparseGridLayer state={active} bounds={visibleBounds} rowOffset={authoredRowOffset} renderedRows={renderedRows} mode={modeSig} timeline={() => timeline} layer="upper" onMounted={(count) => { upperMounted = count; refreshMounted(); publish(); }} />
+        <SparseGridLayer state={active} bounds={visibleBounds} rowOffset={authoredRowOffset} renderedRows={renderedRows} mode={modeSig} timeline={() => timeline} layer="upper" recycle={scrubbing} onMounted={(count) => { upperMounted = count; refreshMounted(); publish(); }} />
       </View>
     </View>
     <Show when={modeSig() === "play"}>
