@@ -57,6 +57,41 @@ each example's winning run at 60/30/20/4 Hz and compare milestones).
 The runtime pins PocketJS with a git submodule at
 `vendor/pocketjs` (commit recorded in `git submodule status`).
 
+## Play in the browser
+
+The examples play in the browser at
+**<https://lfkdsk.github.io/pocket-rpgkit/>**. Each page runs the example's
+bundle on the PocketJS core compiled to WebAssembly: the same bundle and
+core the sim tests use. Click the game (it also takes the keyboard when the
+page loads), then use the arrow keys and **A**/**Enter**/**Z** to confirm.
+Each page lists the rest of its controls. Grow's timeline also takes a mouse
+or touch drag, and phones get on-screen buttons.
+
+To build the site locally (no dev server; any static file server works):
+
+```sh
+bun run build:wasm                      # once: the wasm core
+bun run web                             # dist/web: landing page + one page per example
+python3 -m http.server -d dist/web 8000 # then open http://localhost:8000/
+bun tools/web-verify.ts                 # optional: play every page in headless Chrome
+```
+
+`bun run web` builds every example in `EXAMPLES`
+(`tools/build-example.ts`), and `bun run web grow` builds one. Each example
+is resolved against the `web-app` target from its `pocket.json`. Card text,
+preview images and controls come from `web.json`. An example without an
+entry still gets a card: its `pocket.json` title, default controls, and a
+preview rendered from its own bundle. Every URL is relative, so the site
+works under any path. `.github/workflows/pages.yml` publishes `dist/web` to
+GitHub Pages on every push to `main`.
+
+A game that vendors this kit builds its own site the same way, for example
+Alpine Post:
+
+```sh
+bun vendor/pocket-rpgkit/tools/web.ts --project-root . alpine-post
+```
+
 ## Quick start
 
 ```sh
@@ -66,10 +101,11 @@ bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
 bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
-bun test                 # 496 tests incl. sim journeys and pixel goldens
+bun test                 # 513 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, meadow; needs a Rust toolchain)
+bun run web              # the browser site in dist/web (see above)
 ```
 
 On a Mac, `bun run package:macos sunstone` (or `grow`, `meadow`) makes a
@@ -270,7 +306,7 @@ letterboxes small maps and follows the player on large ones.
 | host | runtime | notes |
 | --- | --- | --- |
 | `linux-app` / `macos-app` | PocketJS desktop host | `data.fs` save slots; resizable logical viewport letterboxes per `centerOffset` |
-| `web-app` (wasm) | wasm core | same bundle; save codes when no fs mount |
+| `web-app` (wasm) | wasm core, `tools/web.ts` player pages | same bundle; save codes when no fs mount |
 | sim (`hosts/sim`) | wasm core, headless | deterministic tapes and framebuffer hashes; the example suites run here |
 | `psp` | PSP core | not gated by this repo; the vendor build's `pocket check --target psp` is the admission path for a consuming app (512px baked canvases, PSM_4444) |
 
@@ -284,8 +320,18 @@ src/data/        schema.json (normative) + CHANGELOG
 src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu,
                  Panel, theme (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
-bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
-bun test                 # 496 tests incl. sim journeys and pixel goldens
+tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts) and
+                 the desktop-host build/launch helper (desktop.ts)
+tools/           example/editor build driver, desktop and editor launchers,
+                 macOS packager (package-macos.ts), web site builder
+                 (web.ts, web/, web-verify.ts)
+examples/        meadow (minimal), sunstone (game + attract), grow (demo);
+                 each has its entry, data, assets/src, gen-assets.ts,
+                 images.json, pocket.json and ATTRIBUTION.md
+editor/          tile-map editor (preview): app, engine/, ui/, its cooker
+                 and the tile cells it bakes from the examples' sheets
+tests/           unit suites, sim suites, goldens/, fixtures/ (small
+                 apps the sim suites boot, built by build:example)
 vendor/pocketjs  pinned PocketJS submodule
 ```
 
