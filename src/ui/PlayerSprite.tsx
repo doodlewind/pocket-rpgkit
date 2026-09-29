@@ -10,6 +10,13 @@
 // The image keys come from the caller's PlayerFrames table (its own baked
 // asset manifest): the runtime names no asset paths of its own.
 //
+// Frames are normally 16x16. A 16x32 walker (Tuxemon characters) is one
+// tile wide but two tall: the extra row is the head/shoulders that
+// overflows UPWARD, so the node is translated to its occupied tile origin
+// (move.px, move.py) and shifted up by (h-16), pinning its BOTTOM to the
+// tile's bottom. That keeps feet aligned with the grid and makes the upper
+// half tuck under star-layer tiles (trees, roofs) drawn later in z-order.
+//
 // The pose is a plain static image keyed off saved reducer state, not a core
 // auto-play sprite atlas. An auto-play atlas derives its cell from
 // (coreFrame - sprite_start), a host clock the save snapshot cannot carry:
@@ -35,6 +42,9 @@ export interface PlayerSpriteProps {
   pose: WalkPose;
   facing: Facing;
   frames: PlayerFrames;
+  /** Frame height in px: 16 (square) or 32 (a tall walker whose top half
+   *  overflows the occupied tile upward). Default 16. */
+  height?: 16 | 32;
   ref?: (n: NodeMirror) => void;
 }
 
@@ -45,11 +55,12 @@ export function playerImageKey(pose: WalkPose, facing: Facing, frames: PlayerFra
 }
 
 export function PlayerSprite(props: PlayerSpriteProps) {
+  const h = props.height ?? 16;
   return (
     <Image
-      class="absolute w-[16] h-[16]"
+      class="absolute"
       src={playerImageKey(props.pose, props.facing, props.frames)}
-      style={{ posType: 1, insetL: 0, insetT: 0 }}
+      style={{ posType: 1, insetL: 0, insetT: 16 - h, width: 16, height: h }}
       ref={props.ref}
     />
   );

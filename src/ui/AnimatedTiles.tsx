@@ -1,0 +1,170 @@
+// src/ui/AnimatedTiles.tsx — render-only animated map tiles.
+//
+// Animated tiles are NOT reducer state: each one binds a native auto-play
+// sprite atlas (the core cycles the atlas frame from the vblank clock), so
+// JS never advances a frame and the simulation is unaffected. A tile mounts
+// an image node only while its 16px cell is inside the viewport plus a
+// one-tile ring; leaving the ring unbinds the atlas and returns the node to
+// a pool. Scrolling and map swaps therefore reuse a small node set.
+//
+// One instance paints one z-band: `above=false` mounts just above the
+// ground (under characters); `above=true` mounts with the upper/star layer
+// (over characters). The atlas frame count and per-frame duration come from
+// the app's sprites.json (baked into the SPRITE pak entry), so this
+// component only names the atlas; the registered meta supplies the cycle.
+
+import { onCleanup, type JSX as SolidJSX } from "solid-js";
+import { onFrame } from "@pocketjs/framework/lifecycle";
+import { jump } from "@pocketjs/framework/animation";
+import {
+  createElement,
+  insertNode,
+  setProp,
+  type NodeMirror,
+} from "@pocketjs/framework/renderer";
+import type { AnimatedTile } from "./game-assets.ts";
+import {
+  chunkWindow,
+  type ChunkPoint,
+  type ChunkViewport,
+  type ChunkWindow,
+} from "../engine/chunk-window.ts";
+import { TILE } from "../engine/tiles.ts";
+
+export interface AnimatedTilesStats {
+  mapId: string;
+  /** Tiles with a bound atlas this frame. */
+  mounted: number;
+  /** Nodes created over the component's life. */
+  created: number;
+  /** Pooled (unbound) nodes available to reuse. */
+  pooled: number;
+}
+
+export interface AnimatedTilesProps {
+  mapId: string;
+  /** Map id -> every animated tile placement; this instance keeps only the
+   *  entries matching its `above` band. */
+  tiles: Readonly<Record<string, readonly AnimatedTile[]>>;
+  above: boolean;
+  camera: () => ChunkPoint;
+  viewport: () => ChunkViewport;
+  /** Current map size in 16px tiles for window clamping. */
+  mapTiles: () => { w: number; h: number };
+  /** Extra ring in tiles around the viewport to keep mounted (default 1). */
+  ringTiles?: number;
+  debugName?: string;
+  onStats?: (stats: AnimatedTilesStats) => void;
+}
+
+function sameWindow(a: ChunkWindow, b: ChunkWindow): boolean {
+  return a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
+}
+
+const EMPTY: ChunkWindow = { x0: 0, y0: 0, x1: -1, y1: -1 };
+
+/** One animated-tile z-band. The parent owns the world translation; nodes
+ *  sit at world tile coordinates and rebind only when the window changes. */
+export function AnimatedTiles(props: AnimatedTilesProps): SolidJSX.Element {
+  const root = createElement("view");
+  setProp(root, "style", { posType: 1, insetL: 0, insetT: 0, width: 0, height: 0 });
+  setProp(root, "debugName", props.debugName ?? (props.above ? "rpgkit-anim-above" : "rpgkit-anim-below"));
+
+  const pool: NodeMirror[] = [];
+  /** Key `${x},${y}` -> bound node, for the current map only. */
+  const live = new Map<string, NodeMirror>();
+  let currentMap = "";
+  /** Tile key -> atlas name for the current map/band. */
+  const atlasAt = new Map<string, string>();
+  let hasTiles = false;
+  let lastWindow: ChunkWindow = EMPTY;
+  let created = 0;
+
+  const report = (): void => {
+    props.onStats?.({ mapId: currentMap, mounted: live.size, created, pooled: pool.length });
+  };
+
+  const unbind = (node: NodeMirror): void => {
+    setProp(node, "sprite", null, node.domAttrs?.sprite);
+    pool.push(node);
+  };
+
+  const selectMap = (mapId: string): void => {
+    for (const node of live.values()) unbind(node);
+    live.clear();
+    currentMap = mapId;
+    atlasAt.clear();
+    for (const t of props.tiles[mapId] ?? []) {
+      if (t.above === props.above) atlasAt.set(`${t.x},${t.y}`, t.sprite);
+    }
+    hasTiles = atlasAt.size > 0;
+    lastWindow = EMPTY;
+  };
+
+  const nodeFor = (): NodeMirror => {
+    const reused = pool.pop();
+    if (reused) return reused;
+    const node = createElement("image");
+    setProp(node, "style", { posType: 1, insetL: 0, insetT: 0, width: TILE, height: TILE });
+    insertNode(root, node);
+    created++;
+    return node;
+  };
+
+  const sync = (): void => {
+    if (currentMap !== props.mapId) selectMap(props.mapId);
+    if (!hasTiles) {
+      if (live.size !== 0) {
+        for (const node of live.values()) unbind(node);
+        live.clear();
+        report();
+      }
+      return;
+    }
+    const { w, h } = props.mapTiles();
+    const ring = props.ringTiles ?? 1;
+    if (!Number.isInteger(ring) || ring < 0) {
+      throw new Error(`AnimatedTiles: ringTiles must be a non-negative integer, got ${ring}`);
+    }
+    const win = chunkWindow(props.camera(), props.viewport(), TILE, w, h, ring * TILE);
+    if (sameWindow(win, lastWindow)) return;
+    lastWindow = win;
+
+    // Unbind tiles that left the ring first, so their nodes serve cells
+    // scrolling in during the same update (one pass would otherwise create a
+    // node per entering cell before the leaving ones free theirs).
+    for (const [key, node] of [...live]) {
+      const comma = key.indexOf(",");
+      const x = Number(key.slice(0, comma));
+      const y = Number(key.slice(comma + 1));
+      if (x < win.x0 || x > win.x1 || y < win.y0 || y > win.y1) {
+        unbind(node);
+        live.delete(key);
+      }
+    }
+
+    for (let y = win.y0; y <= win.y1; y++) {
+      for (let x = win.x0; x <= win.x1; x++) {
+        const key = `${x},${y}`;
+        if (live.has(key)) continue;
+        const sprite = atlasAt.get(key);
+        if (sprite === undefined) continue;
+        const node = nodeFor();
+        setProp(node, "debugName", `${props.debugName ?? "rpgkit-anim"}-tile-${key}`);
+        jump(node, "translateX", x * TILE);
+        jump(node, "translateY", y * TILE);
+        setProp(node, "sprite", sprite, null);
+        live.set(key, node);
+      }
+    }
+    report();
+  };
+
+  onFrame(sync);
+  onCleanup(() => {
+    for (const node of live.values()) unbind(node);
+    live.clear();
+    report();
+  });
+  return root as unknown as SolidJSX.Element;
+}

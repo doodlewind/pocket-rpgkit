@@ -20,6 +20,37 @@ export interface StreamedGameAssets {
   loadBudget?: number;
 }
 
+/** One animated-tile placement on a map. `sprite` is the registered sprite
+ *  atlas name (an entry in the app's sprites.json); its frame count and
+ *  frame duration live there, so the core auto-plays the atlas and the JS
+ *  side never advances a frame. Render-only: never part of reducer state. */
+export interface AnimatedTile {
+  /** Tile column (16px grid). */
+  x: number;
+  /** Tile row. */
+  y: number;
+  /** false = drawn under characters (just above the ground layer);
+   *  true = drawn above characters (with the upper/star layer). */
+  above: boolean;
+  /** Registered sprite atlas name (key in sprites.json). */
+  sprite: string;
+}
+
+/** The 12 static walker frames for one character, indexed by facing
+ *  (0 down, 1 left, 2 up, 3 right) and by walk pose. Frames are baked IMG
+ *  entries chosen from the saved reducer facing + mover phase, never a host
+ *  clock, so a restored session renders identical pixels. `h` is the frame
+ *  height in pixels (16 square, or 32 for a 16x32 sheet whose extra row
+ *  overflows upward and is anchored to the occupied tile's bottom). */
+export interface CharacterFrames extends PlayerFrames {
+  /** Frame height in px (width is always 16): 16 or 32. */
+  h: 16 | 32;
+}
+
+/** How one page.sprite key is painted: a single static 16x16 image, or a
+ *  twelve-frame walker (optionally 16x32). */
+export type NpcArt = string | CharacterFrames;
+
 export interface GameAssets {
   /** Map id -> row-major baked 512x512 ground chunks. */
   ground: Readonly<Record<string, readonly string[]>>;
@@ -33,11 +64,16 @@ export interface GameAssets {
   world: Readonly<Record<string, { w: number; h: number }>>;
   /** Map ids in NPC-container mount order. */
   order: readonly string[];
-  /** Page.sprite key -> baked 16x16 character image. */
-  npcSrc: Readonly<Record<string, string>>;
+  /** Page.sprite key -> static 16x16 image src or a 12-frame walker. */
+  npcSrc: Readonly<Record<string, NpcArt>>;
   /** The player's 12 static walker frames. */
   player: PlayerFrames;
+  /** Player frame height in px; 16 (square) when omitted, 32 for a 16x32
+   *  walker anchored to the occupied tile's bottom. */
+  playerHeight?: 16 | 32;
   /** Optional viewport-streamed map art. When present GameView does not mount
-   * the legacy eager ground/upper image grids. */
+   *  the legacy eager ground/upper image grids. */
   stream?: StreamedGameAssets;
+  /** Map id -> render-only animated tile placements. */
+  animated?: Readonly<Record<string, readonly AnimatedTile[]>>;
 }

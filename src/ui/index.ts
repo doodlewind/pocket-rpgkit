@@ -20,5 +20,12 @@ export {
   type StreamedChunkLayerProps,
   type StreamedChunkLayerStats,
 } from "./StreamedChunkLayer.tsx";
+export { AnimatedTiles, type AnimatedTilesProps, type AnimatedTilesStats } from "./AnimatedTiles.tsx";
 export { GameView } from "./GameView.tsx";
-export type { GameAssets, StreamedGameAssets } from "./game-assets.ts";
+export type {
+  AnimatedTile,
+  CharacterFrames,
+  GameAssets,
+  NpcArt,
+  StreamedGameAssets,
+} from "./game-assets.ts";

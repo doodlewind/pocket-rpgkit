@@ -209,7 +209,7 @@ describe("the example project conforms to data/schema.json", () => {
     const schema = await Bun.file(new URL("../src/data/schema.json", import.meta.url)).json();
     const sourceSheet = structuredClone(buildMiniProject()) as Project;
     sourceSheet.sprites = {
-      hero: { kind: "walker", sheet: "assets/hero.png", h: 32, cols: 3, rows: 4 },
+      hero: { kind: "walker", sheet: "hero-source", h: 32, cols: 3, rows: 4 },
     };
     expect(validateSchema(schema, sourceSheet)).toEqual([]);
 

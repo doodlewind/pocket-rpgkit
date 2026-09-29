@@ -153,7 +153,7 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
           "required": ["kind", "sheet"],
           "properties": {
             "kind": { "const": "walker" },
-            "sheet": { "type": "string", "description": "Source PNG grid sliced at build time into deterministic static facing/pose frames." },
+            "sheet": { "type": "string", "description": "Build-time source sheet id/path, sliced into deterministic static facing/pose frames; the runtime does not load it." },
             "h": { "type": "integer", "enum": [16, 32], "description": "Frame height in pixels; defaults to 32. Width is always 16." },
             "cols": { "type": "integer", "minimum": 3, "maximum": 32, "description": "Source sheet columns; defaults to 3." },
             "rows": { "type": "integer", "minimum": 4, "maximum": 32, "description": "Source sheet rows; defaults to 4." }

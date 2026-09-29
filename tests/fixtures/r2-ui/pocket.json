@@ -1,0 +1,24 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.lfkdsk.pocket-rpgkit-r2-ui-fixture",
+  "name": "pocket-rpgkit-r2-ui-fixture",
+  "title": "Pocket RPG Kit — animated tall-walker fixture",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": ["input.buttons"]
+    }
+  },
+  "app": {
+    "entry": "tests/fixtures/r2-ui/r2-ui.tsx",
+    "output": "r2-ui",
+    "framework": "solid",
+    "viewport": {
+      "fixed": {
+        "logical": [480, 272],
+        "presentation": "integer-fit"
+      }
+    }
+  }
+}

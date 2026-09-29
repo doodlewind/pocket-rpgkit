@@ -49,12 +49,13 @@ import {
 import { AttractController, type AttractStatus } from "../engine/attract.ts";
 import { activePage, createSwitchState, eventIdLess, modalChanged } from "../engine/interpreter.ts";
 import type { CameraState, Facing, GameEvent, MapDef, Project, SpriteDef } from "../engine/types.ts";
-import { PlayerSprite } from "./PlayerSprite.tsx";
+import { PlayerSprite, playerImageKey } from "./PlayerSprite.tsx";
 import { walkPose, type WalkPose } from "../engine/movement.ts";
 import { DialogBox } from "./DialogBox.tsx";
 import type { UiTheme } from "./theme.ts";
 import type { Modal } from "../engine/interpreter.ts";
-import type { GameAssets } from "./game-assets.ts";
+import type { GameAssets, NpcArt } from "./game-assets.ts";
+import { AnimatedTiles, type AnimatedTilesStats } from "./AnimatedTiles.tsx";
 import { ChunkLayer } from "./ChunkLayer.tsx";
 import { StreamedChunkLayer, type StreamedChunkLayerStats } from "./StreamedChunkLayer.tsx";
 
@@ -68,24 +69,52 @@ interface NpcSlot {
   mapId: string;
   eventId: string;
   key: string;
-  src: string;
+  /** The art the slot first mounts with (a static image src or a walker). */
+  art: NpcArt;
+}
+
+/** Whether a project SpriteDef ever paints a character (static or walker). */
+function spritePaints(def: SpriteDef | undefined): boolean {
+  return !!def && (def.kind === "walker" || !!def.src);
+}
+
+/** Resolve a page sprite key to its asset-cooked art for one slot. */
+function slotArt(
+  sprites: Sprites,
+  npcSrc: GameAssets["npcSrc"],
+  name: string | null | undefined,
+): NpcArt | "" {
+  if (!name) return "";
+  const def = sprites[name];
+  if (!spritePaints(def)) return "";
+  return npcSrc[name] ?? "";
+}
+
+/** The image key for a character's current art, given its live facing and
+ *  mover phase. A static image art is returned as-is; a walker picks the
+ *  idle/step-L/step-R frame for the facing from the saved phase. */
+function characterImage(art: NpcArt, facing: Facing, phase: number): string {
+  if (typeof art === "string") return art;
+  return playerImageKey(walkPose(phase), facing, art);
 }
 
 /** Events that ever show a character image, in stable mount order. The
- *  mounted src is the initially-active page's sprite (empty when that page
+ *  mounted art is the initially-active page's sprite (empty when that page
  *  has none); per-frame page selection swaps it later. */
-function collectSlots(maps: readonly MapDef[], sprites: Sprites, order: readonly string[]): NpcSlot[] {
+function collectSlots(
+  maps: readonly MapDef[],
+  sprites: Sprites,
+  npcSrc: GameAssets["npcSrc"],
+  order: readonly string[],
+): NpcSlot[] {
   const slots: NpcSlot[] = [];
   const initial = createSwitchState();
   for (const mapId of order) {
     const map = maps.find((m) => m.id === mapId)!;
     for (const ev of [...(map.events as GameEvent[])].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
-      const everSprite = ev.pages.some((p) => p.sprite != null && sprites[p.sprite!]?.src);
-      if (!everSprite) continue;
+      if (!ev.pages.some((p) => spritePaints(p.sprite != null ? sprites[p.sprite!] : undefined))) continue;
       const active = activePage(ev, initial, mapId);
-      const name = active?.page.sprite;
-      const src = name ? sprites[name]?.src ?? "" : "";
-      slots.push({ mapId, eventId: ev.id, key: `${mapId}/${ev.id}`, src });
+      slots.push({ mapId, eventId: ev.id, key: `${mapId}/${ev.id}`, art: slotArt(sprites, npcSrc, active?.page.sprite) });
     }
   }
   return slots;
@@ -114,6 +143,8 @@ export function GameView(props: {
   faceWidth?: number;
   /** Optional diagnostics for streamed ground/upper residency. */
   onStreamStats?: (layer: "ground" | "upper", stats: StreamedChunkLayerStats) => void;
+  /** Optional diagnostics for viewport-mounted animated tile sprites. */
+  onAnimatedStats?: (layer: "below" | "above", stats: AnimatedTilesStats) => void;
 }) {
   const { project, assets } = props;
   const stream = assets.stream;
@@ -127,8 +158,14 @@ export function GameView(props: {
   let state: SessionState = attract ? attract.state : startSession(project, session);
   globalThis.__rpgSessionState = state;
 
-  const slots = collectSlots(project.maps, (project.sprites ?? {}) as Sprites, assets.order);
+  const slots = collectSlots(project.maps, (project.sprites ?? {}) as Sprites, assets.npcSrc, assets.order);
   const slotIndex = new Map(slots.map((s, i) => [s.key, i]));
+  const slotsByMap = new Map<string, NpcSlot[]>();
+  for (const slot of slots) {
+    const group = slotsByMap.get(slot.mapId) ?? [];
+    group.push(slot);
+    slotsByMap.set(slot.mapId, group);
+  }
 
   const [mapId, setMapId] = createSignal(state.mapId);
   const [pose, setPose] = createSignal<WalkPose>(walkPose(state.move.phase));
@@ -167,9 +204,24 @@ export function GameView(props: {
   };
   let camera = cameraFor(state);
   globalThis.__rpgGameCamera = camera;
-  const initialNpcSrc: Record<string, string> = {};
-  for (const s of slots) initialNpcSrc[s.key] = s.src;
-  const [npcSrc, setNpcSrc] = createSignal<Record<string, string>>(initialNpcSrc);
+  // Per-slot resolved image src and frame height. A walker's src also moves
+  // with its live facing + mover phase, recomputed every frame below; a
+  // 32px frame anchors its bottom to the occupied tile (insetT = 16-h).
+  const initialNpcImage: Record<string, string> = {};
+  const initialNpcHeight: Record<string, 16 | 32> = {};
+  for (const slot of slots) {
+    initialNpcImage[slot.key] = typeof slot.art === "string"
+      ? slot.art
+      : playerImageKey(0, 0, slot.art);
+    initialNpcHeight[slot.key] = typeof slot.art === "string" ? 16 : slot.art.h;
+  }
+  const [npcImage, setNpcImage] = createSignal<Record<string, string>>(initialNpcImage);
+  const [npcHeight, setNpcHeight] = createSignal<Record<string, 16 | 32>>(initialNpcHeight);
+  // Mutable mirror of each slot's current art (string image or walker),
+  // updated by page swaps outside a signal diff so the per-frame pose pass
+  // can read it without re-deriving from project state.
+  const slotArtCurrent: Record<string, NpcArt | ""> = {};
+  for (const slot of slots) slotArtCurrent[slot.key] = slot.art;
   const [fade, setFade] = createSignal(0);
 
   // Live play fires reducer edges from the action handlers. Under the
@@ -309,22 +361,44 @@ export function GameView(props: {
     globalThis.__rpgGameCamera = camera;
     if (moved || status?.loopReset || status?.rewound) jumpBatch?.commit();
 
-    // Page-driven sprite swaps (chest lids, lit rune, gates). An event
-    // whose new active page has sprite:null loses its image (the opened
-    // thorn/iron gates): src "" -> setImage(-1).
+    // Page-driven art swaps (chest lids, lit rune, gates) and, for walkers,
+    // the per-frame pose chosen from the live CharState facing + mover
+    // phase. An event whose active page loses its sprite paints nothing
+    // (opened thorn/iron gates): image "" -> setImage(-1).
     const currentMap = project.maps.find((m) => m.id === state.mapId)!;
-    let srcChanged = false;
-    const nextSrc = { ...npcSrc() };
+    const liveArt = slotArtCurrent;
     for (const ev of currentMap.events ?? []) {
       const idx = slotAt(state.mapId, ev.id);
       if (idx === undefined) continue;
       const active = activePage(ev, state.sw, state.mapId, state.move.facing);
-      const name = active?.page.sprite;
-      const want = name ? assets.npcSrc[name] ?? "" : "";
+      const want = slotArt((project.sprites ?? {}) as Sprites, assets.npcSrc, active?.page.sprite);
       const key = `${state.mapId}/${ev.id}`;
-      if (nextSrc[key] !== want) {
-        nextSrc[key] = want;
-        srcChanged = true;
+      if (liveArt[key] !== want) {
+        liveArt[key] = want;
+      }
+    }
+    // Resolve every CURRENT-map character's image from its live pose. A
+    // walker has no CharState only before the first sync; fall back to the
+    // down-facing idle frame then.
+    let nextImage: Record<string, string> | null = null;
+    let nextHeight: Record<string, 16 | 32> | null = null;
+    const oldImage = npcImage();
+    const oldHeight = npcHeight();
+    for (const slot of slotsByMap.get(state.mapId) ?? []) {
+      const key = slot.key;
+      const art = liveArt[key] ?? "";
+      const ch = state.chars.chars[slot.eventId];
+      const image = art === ""
+        ? ""
+        : characterImage(art, ch ? ch.facing : 0, ch ? ch.phase : 0);
+      const height: 16 | 32 = typeof art === "string" ? 16 : art.h;
+      if (oldImage[key] !== image) {
+        nextImage ??= { ...oldImage };
+        nextImage[key] = image;
+      }
+      if (oldHeight[key] !== height) {
+        nextHeight ??= { ...oldHeight };
+        nextHeight[key] = height;
       }
     }
 
@@ -336,7 +410,8 @@ export function GameView(props: {
       const nextPose = walkPose(state.move.phase);
       if (nextPose !== pose()) setPose(nextPose);
       if (state.move.facing !== facing()) setFacing(state.move.facing);
-      if (srcChanged) setNpcSrc(nextSrc);
+      if (nextImage) setNpcImage(nextImage);
+      if (nextHeight) setNpcHeight(nextHeight);
       if (op !== fade()) setFade(op);
       const shownModal = attract ? attract.presentedModal() : state.interp.modal;
       setModal((m) => (modalChanged(m, shownModal) ? deepClone(shownModal) : m));
@@ -401,6 +476,22 @@ export function GameView(props: {
             />
           )}
 
+          {assets.animated ? (
+            <AnimatedTiles
+              mapId={mapId()}
+              tiles={assets.animated}
+              above={false}
+              camera={() => camera}
+              viewport={() => viewport()}
+              mapTiles={() => {
+                const m = project.maps.find((mm) => mm.id === mapId())!;
+                return { w: m.width, h: m.height };
+              }}
+              debugName="rpgkit-anim-below"
+              onStats={(stats) => props.onAnimatedStats?.("below", stats)}
+            />
+          ) : null}
+
           {assets.order.map((mid) => (
             <View
               class="absolute"
@@ -411,11 +502,12 @@ export function GameView(props: {
                 .filter((s) => s.mapId === mid)
                 .map((slot) => {
                   const i = slotIndex.get(slot.key)!;
+                  const h = npcHeight()[slot.key] ?? 16;
                   return (
                     <Image
-                      src={npcSrc()[slot.key]}
-                      class="absolute w-[16] h-[16]"
-                      style={{ posType: 1, insetL: 0, insetT: 0 }}
+                      src={npcImage()[slot.key]}
+                      class="absolute"
+                      style={{ posType: 1, insetL: 0, insetT: 16 - h, width: 16, height: h }}
                       nodeRef={(n) => {
                         npcRefs[i] = n;
                       }}
@@ -429,6 +521,7 @@ export function GameView(props: {
             pose={pose()}
             facing={facing()}
             frames={assets.player}
+            height={assets.playerHeight ?? 16}
             ref={(n) => {
               playerRefs[0] = n;
             }}
@@ -455,6 +548,22 @@ export function GameView(props: {
               debugName="rpgkit-upper"
             />
           )}
+
+          {assets.animated ? (
+            <AnimatedTiles
+              mapId={mapId()}
+              tiles={assets.animated}
+              above={true}
+              camera={() => camera}
+              viewport={() => viewport()}
+              mapTiles={() => {
+                const m = project.maps.find((mm) => mm.id === mapId())!;
+                return { w: m.width, h: m.height };
+              }}
+              debugName="rpgkit-anim-above"
+              onStats={(stats) => props.onAnimatedStats?.("above", stats)}
+            />
+          ) : null}
         </View>
       </View>
 

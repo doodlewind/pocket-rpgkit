@@ -84,7 +84,7 @@ fields and commands are optional and the v1 spellings keep their meaning.
 - `playerName` optionally supplies the fresh-session value substituted for
   `{name}` in text and choice prompts. The value lives in save state after
   startup.
-- A `walker` sprite may name a source `sheet` with optional `h`, `cols` and
+- A `walker` sprite may name a build-time source `sheet` id/path with optional `h`, `cols` and
   `rows`. The default is a 3-column by 4-row sheet of 16×32 frames; the asset
   cooker slices it into idle/left-step/right-step images for four facings.
   The original per-direction `atlases` walker declaration remains valid.

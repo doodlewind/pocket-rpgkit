@@ -195,7 +195,7 @@ export interface ImageSpriteDef {
  *  host auto-play clock, so saves stay deterministic. */
 export interface WalkerSheetSpriteDef {
   kind: "walker";
-  /** Source walker sheet PNG. */
+  /** Build-time source sheet id/path. The runtime does not load it. */
   sheet: string;
   /** Frame height in px: 32 (default) for a 16x32 sheet whose top row
    *  overflows upward, or 16 for a square sheet. */
