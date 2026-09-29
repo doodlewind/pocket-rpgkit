@@ -1,0 +1,24 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.lfkdsk.pocket-rpgkit-streamed-fixture",
+  "name": "pocket-rpgkit-streamed-fixture",
+  "title": "Pocket RPG Kit — streamed chunk fixture",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": ["input.buttons"]
+    }
+  },
+  "app": {
+    "entry": "tests/fixtures/streamed/streamed.tsx",
+    "output": "streamed",
+    "framework": "solid",
+    "viewport": {
+      "fixed": {
+        "logical": [480, 272],
+        "presentation": "integer-fit"
+      }
+    }
+  }
+}

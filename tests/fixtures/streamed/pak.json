@@ -1,0 +1,14 @@
+[
+  {
+    "key": "ui:tile.fixture-violet-harbor-ground",
+    "file": "assets/stream/fixture-violet-harbor-ground.pkts"
+  },
+  {
+    "key": "ui:tile.fixture-wide-field-ground",
+    "file": "assets/stream/fixture-wide-field-ground.pkts"
+  },
+  {
+    "key": "ui:tile.fixture-wide-field-upper",
+    "file": "assets/stream/fixture-wide-field-upper.pkts"
+  }
+]

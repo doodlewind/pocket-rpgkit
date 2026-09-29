@@ -56,6 +56,7 @@ import type { UiTheme } from "./theme.ts";
 import type { Modal } from "../engine/interpreter.ts";
 import type { GameAssets } from "./game-assets.ts";
 import { ChunkLayer } from "./ChunkLayer.tsx";
+import { StreamedChunkLayer, type StreamedChunkLayerStats } from "./StreamedChunkLayer.tsx";
 
 type Sprites = Record<string, SpriteDef>;
 
@@ -111,8 +112,11 @@ export function GameView(props: {
   faces?: Readonly<Record<string, string>>;
   /** DialogBox portrait column width (default 72). */
   faceWidth?: number;
+  /** Optional diagnostics for streamed ground/upper residency. */
+  onStreamStats?: (layer: "ground" | "upper", stats: StreamedChunkLayerStats) => void;
 }) {
   const { project, assets } = props;
+  const stream = assets.stream;
   // The host rate selects how many fixed 60 Hz reference ticks each frame
   // folds. Time-bearing commands compile against that fixed reference.
   const hz = simulationHz();
@@ -375,12 +379,27 @@ export function GameView(props: {
           }}
           debugName="rpgkit-world"
         >
-          <ChunkLayer
-            names={assets.ground[mapId()] ?? assets.ground[firstMapId]!}
-            columns={assets.chunkColumns[mapId()] ?? assets.chunkColumns[firstMapId] ?? 1}
-            slots={assets.maxChunks}
-            debugName="rpgkit-ground"
-          />
+          {stream ? (
+            <StreamedChunkLayer
+              mapId={mapId()}
+              refs={stream.ground}
+              columns={stream.columns}
+              chunkPx={stream.chunkPx}
+              camera={() => camera}
+              viewport={() => viewport()}
+              margin={stream.margin}
+              loadBudget={stream.loadBudget}
+              debugName="rpgkit-ground"
+              onStats={(stats) => props.onStreamStats?.("ground", stats)}
+            />
+          ) : (
+            <ChunkLayer
+              names={assets.ground[mapId()] ?? assets.ground[firstMapId]!}
+              columns={assets.chunkColumns[mapId()] ?? assets.chunkColumns[firstMapId] ?? 1}
+              slots={assets.maxChunks}
+              debugName="rpgkit-ground"
+            />
+          )}
 
           {assets.order.map((mid) => (
             <View
@@ -415,12 +434,27 @@ export function GameView(props: {
             }}
           />
 
-          <ChunkLayer
-            names={assets.upper[mapId()] ?? assets.upper[firstMapId]!}
-            columns={assets.chunkColumns[mapId()] ?? assets.chunkColumns[firstMapId] ?? 1}
-            slots={assets.maxChunks}
-            debugName="rpgkit-upper"
-          />
+          {stream ? (
+            <StreamedChunkLayer
+              mapId={mapId()}
+              refs={stream.upper}
+              columns={stream.columns}
+              chunkPx={stream.chunkPx}
+              camera={() => camera}
+              viewport={() => viewport()}
+              margin={stream.margin}
+              loadBudget={stream.loadBudget}
+              debugName="rpgkit-upper"
+              onStats={(stats) => props.onStreamStats?.("upper", stats)}
+            />
+          ) : (
+            <ChunkLayer
+              names={assets.upper[mapId()] ?? assets.upper[firstMapId]!}
+              columns={assets.chunkColumns[mapId()] ?? assets.chunkColumns[firstMapId] ?? 1}
+              slots={assets.maxChunks}
+              debugName="rpgkit-upper"
+            />
+          )}
         </View>
       </View>
 

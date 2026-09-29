@@ -12,7 +12,8 @@ the parts an RPG-Maker-style game needs without any specific game:
 - **Solid UI components** (`src/ui/`) — `GameView`, a complete game screen
   for a project (chunked maps, follow camera, NPCs, dialog, fades, and
   optional attract mode), plus the blocks it is made of: `DialogBox`,
-  `PlayerSprite`, `ChunkLayer`, `SaveMenu`, `Panel`. The framed ones take a
+  `PlayerSprite`, `ChunkLayer`, `StreamedChunkLayer`, `SaveMenu`, `Panel`.
+  The framed ones take a
   colour theme, and `DialogBox` shows speaker portraits;
 - **attract mode** (`src/engine/attract.ts`) — after 10 idle seconds a
   recorded playthrough replays from a clean world; any button takes over
@@ -22,8 +23,8 @@ the parts an RPG-Maker-style game needs without any specific game:
 - **host adapters** (`src/host/`) — the `data.fs` save slot store and the
   attract-tape override loader;
 - **build-time asset pipelines** (`tools/lib/`) — tile sheets to baked
-  512px PSM_4444 canvases and chunks, static walker frames, and the
-  `GameAssets` manifest a game mounts;
+  512px PSM_4444 canvases and chunks, or 256px CLUT8+RLE streamed chunks,
+  static walker frames, and the `GameAssets` manifest a game mounts;
 - **the format** (`src/data/schema.json`, v1; changes recorded in
   `src/data/CHANGELOG.md`);
 - **four examples** (`examples/`), each a PocketJS app with its own art
@@ -310,6 +311,70 @@ tile boundary, no modal, no parked request). Hosts with `data.fs` write
 three slots through `src/host/save-fs.ts`; other hosts exchange the same
 envelope as URL-safe base64 text (the save code).
 
+### Large-map streamed rendering
+
+The legacy `GameAssets` path mounts every baked 512px map image. Large or
+numerous maps can instead add `assets.stream`; `GameView` then uses
+`StreamedChunkLayer` for the ground and upper layers while leaving the
+project document, collision, camera, characters and event interpreter
+unchanged. Existing manifests without `stream` still take the original
+`ChunkLayer` path.
+
+At build time, compose the same ground and upper RGBA pixels used by
+`bakeMapChunks`, but cut each layer into row-major 256×256 chunks. Encode
+each map layer and collect its pak entries:
+
+```ts
+import {
+  encodeStreamedLayer,
+  pakManifest,
+  streamEntryFile,
+  streamManifestSource,
+} from "./tools/lib/stream.ts"; // use the equivalent vendor path in a game repo
+
+const ground = encodeStreamedLayer("world-ground", groundRgba, columns, rows);
+const upper = encodeStreamedLayer("world-upper", upperRgba, columns, rows);
+const entries = [...ground.entries, ...upper.entries];
+
+// Write each entry.blob to streamEntryFile(entry.key), and use these rows
+// as the app's pak.json. `streamManifestSource` emits the stream: literal.
+const pakRows = pakManifest(entries);
+const stream = streamManifestSource([{
+  id: "world", width: mapWidthInTiles, height: mapHeightInTiles,
+  ground: ground.layer, upper: upper.layer,
+}]);
+```
+
+Each emitted pak entry is a CLUT8 `TILESET` with PackBits RLE and reserved
+transparent index 0. A fully transparent chunk becomes a null ref and
+occupies no pak entry. A layer with at most 256 colours shares one palette
+and entry; a wider layer splits into per-chunk entries, and byte-identical
+chunks reuse one ref. The encoder reports any individual chunk that still
+needed deterministic colour quantization. The fixture cooker in
+`tests/fixtures/streamed/gen-assets.ts` is a complete writing example.
+
+The generated string goes in the optional `stream` field of `GameAssets`:
+
+```ts
+stream: {
+  chunkPx: 256,
+  ground: { world: ["ui:tile.world-ground#0", /* ... */] },
+  upper: { world: [null, /* ... */] },
+  columns: { world: 4 },
+  margin: 16,       // optional prefetch in pixels; default 16
+  loadBudget: 2,   // optional uploads per layer per frame; default unlimited
+}
+```
+
+Only chunks intersecting the camera plus the prefetch margin are loaded
+through `loadTileTexture`. Chunks remain resident for one extra chunk of
+hysteresis, then their texture is freed; image nodes are pooled across
+scrolling and map transfers. Ground stays below characters and upper stays
+above them. Pass `onStreamStats` to `GameView` for per-layer resident,
+texture-byte, upload, free, pool and pending counts. `chunkWindow` from the
+engine package exposes the same clamped viewport arithmetic for tooling and
+tests.
+
 ### Themes and speaker portraits
 
 `DialogBox`, `SaveMenu` and `GameView` take an optional `theme`, a
@@ -370,14 +435,15 @@ letterboxes small maps and follows the player on large ones.
 
 ```
 src/engine/      pure runtime (types, motion-clock, movement, passability,
-                 interpreter, chars, session, camera, viewport, tiles,
-                 save*, schema-validate, attract, tape, journey-search)
+                 interpreter, chars, session, camera, viewport, chunk-window,
+                 tiles, save*, schema-validate, attract, tape, journey-search)
 src/data/        schema.json (normative) + CHANGELOG
-src/ui/          GameView, ChunkLayer, DialogBox, PlayerSprite, SaveMenu,
-                 Panel, theme (UiTheme, speaker prefixes)
+src/ui/          GameView, ChunkLayer, StreamedChunkLayer, DialogBox,
+                 PlayerSprite, SaveMenu, Panel, theme (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
-tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts) and
-                 the desktop-host build/launch helper (desktop.ts)
+tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts,
+                 stream.ts) and the desktop-host build/launch helper
+                 (desktop.ts)
 tools/           example/editor build driver, desktop and editor launchers,
                  macOS packager (package-macos.ts), web site builder
                  (web.ts, web/, web-verify.ts)
