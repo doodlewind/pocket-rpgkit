@@ -45,6 +45,9 @@ export interface PlayerSpriteProps {
   /** Frame height in px: 16 (square) or 32 (a tall walker whose top half
    *  overflows the occupied tile upward). Default 16. */
   height?: 16 | 32;
+  /** Paint-only actor depth, normally derived from the live (y, x). */
+  zIndex?: number;
+  debugName?: string;
   ref?: (n: NodeMirror) => void;
 }
 
@@ -60,8 +63,9 @@ export function PlayerSprite(props: PlayerSpriteProps) {
     <Image
       class="absolute"
       src={playerImageKey(props.pose, props.facing, props.frames)}
-      style={{ posType: 1, insetL: 0, insetT: 16 - h, width: 16, height: h }}
+      style={{ posType: 1, insetL: 0, insetT: 16 - h, width: 16, height: h, zIndex: props.zIndex ?? 0 }}
       ref={props.ref}
+      debugName={props.debugName}
     />
   );
 }

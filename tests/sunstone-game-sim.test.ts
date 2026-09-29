@@ -334,11 +334,17 @@ simDescribe("sunstone — fixed transfer tape: pixels and op burst", () => {
     expect(swap).toBeGreaterThan(-1);
     const burst = recs[swap]!.ops;
     const total = COUNTED.reduce((n, o) => n + burst[o], 0);
-    // ground + upper src swaps; no per-tile setImage/setProp churn.
-    expect(burst.setImage).toBeGreaterThanOrEqual(2);
-    expect(burst.setImage).toBeLessThanOrEqual(4);
+    // The 14-row destination fits one 512px upper chunk column, so the
+    // row-sliced plane needs 14 source swaps. One ground slot plus eight
+    // persistent actor slots make the measured ceiling 14 * 1 + 1 + 8 = 23.
+    expect(burst.setImage).toBeGreaterThanOrEqual(14);
+    expect(burst.setImage).toBeLessThanOrEqual(23);
+    // Rows, slices, and actor slots stay mounted through the transfer.
     expect(burst.createNode + burst.destroyNode).toBe(0);
-    expect(total).toBeLessThan(12);
+    expect(burst.insertBefore + burst.removeChild).toBe(0);
+    // Besides image swaps: one combined camera/actor position batch, five
+    // changed depths, and four geometry writes for one height-changing slot.
+    expect(total).toBeLessThanOrEqual(33);
   });
 });
 
@@ -403,9 +409,10 @@ simDescribe("sunstone — render budget", () => {
     // renderers, both walker heights, the extended event model (areas,
     // compound and facing conditions, place, input lock) and the movement
     // extensions (one-sided passage, routes on any event, turn/pathTo/
-    // approach, memoized passage cooking): 351 KB. The bound keeps a few
+    // approach, memoized passage cooking) and the current-map actor plane
+    // with row-sliced upper occlusion: 365 KB. The bound keeps a few
     // percent of headroom so an accidental bundle-in still trips it.
-    expect(jsBytes).toBeLessThan(365_000);
+    expect(jsBytes).toBeLessThan(380_000);
   });
 });
 

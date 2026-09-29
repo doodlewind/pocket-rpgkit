@@ -13,10 +13,8 @@
 //                 centers undersized axes for black letterboxing)
 //       translated world      follows the player on oversized axes
 //       ground chunks         row-major 512x512 images
-//       per-map NPC containers  one Image per character; the inactive
-//                               map's container is display:none
-//       player Sprite           the Sharm walker
-//       upper chunks            star layer of the current map
+//       upper/actor plane       only current-map characters; actors and
+//                               clipped upper rows share (y,x) paint order
 //     DialogBox               text / choices (themed, with portraits when
 //                             the entry passes theme / faces)
 //     fade overlay            black, opacity ramps for a faded transfer
@@ -27,9 +25,10 @@
 // the world camera commit through one precompiled jump batch; chunk images
 // stay mounted while the player walks.
 
-import { batch, createSignal, onMount, Show } from "solid-js";
+import { batch, createSignal, onMount, Show, type Accessor } from "solid-js";
 import { Image, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { createJumpBatch, type JumpBatch } from "@pocketjs/framework/animation";
+import { createElement, setProp } from "@pocketjs/framework/renderer";
 import { onFrame } from "@pocketjs/framework/lifecycle";
 import { useActions } from "@pocketjs/framework/actions";
 import { simulationHz } from "@pocketjs/framework/clock";
@@ -47,10 +46,11 @@ import {
   type SessionState,
 } from "../engine/session.ts";
 import { AttractController, type AttractStatus } from "../engine/attract.ts";
-import { activePage, createSwitchState, eventIdLess, modalChanged } from "../engine/interpreter.ts";
+import { activePage, eventIdLess, modalChanged } from "../engine/interpreter.ts";
 import type { CameraState, Facing, GameEvent, MapDef, Project, SpriteDef } from "../engine/types.ts";
 import { PlayerSprite, playerImageKey } from "./PlayerSprite.tsx";
 import { walkPose, type WalkPose } from "../engine/movement.ts";
+import { TILE } from "../engine/tiles.ts";
 import { DialogBox } from "./DialogBox.tsx";
 import type { UiTheme } from "./theme.ts";
 import type { Modal } from "../engine/interpreter.ts";
@@ -58,6 +58,7 @@ import type { GameAssets, NpcArt } from "./game-assets.ts";
 import { AnimatedTiles, type AnimatedTilesStats } from "./AnimatedTiles.tsx";
 import { ChunkLayer } from "./ChunkLayer.tsx";
 import { StreamedChunkLayer, type StreamedChunkLayerStats } from "./StreamedChunkLayer.tsx";
+import { actorDepth, OccludingUpperLayer } from "./OccludingUpperLayer.tsx";
 
 type Sprites = Record<string, SpriteDef>;
 
@@ -65,59 +66,230 @@ type Sprites = Record<string, SpriteDef>;
 const SCREEN_W = 480;
 const SCREEN_H = 272;
 
-interface NpcSlot {
-  mapId: string;
-  eventId: string;
-  key: string;
-  /** The art the slot first mounts with (a static image src or a walker). */
-  art: NpcArt;
-}
-
 /** Whether a project SpriteDef ever paints a character (static or walker). */
 function spritePaints(def: SpriteDef | undefined): boolean {
   return !!def && (def.kind === "walker" || !!def.src);
 }
 
-/** Resolve a page sprite key to its asset-cooked art for one slot. */
-function slotArt(
-  sprites: Sprites,
-  npcSrc: GameAssets["npcSrc"],
-  name: string | null | undefined,
-): NpcArt | "" {
-  if (!name) return "";
-  const def = sprites[name];
-  if (!spritePaints(def)) return "";
-  return npcSrc[name] ?? "";
-}
-
-/** The image key for a character's current art, given its live facing and
- *  mover phase. A static image art is returned as-is; a walker picks the
- *  idle/step-L/step-R frame for the facing from the saved phase. */
-function characterImage(art: NpcArt, facing: Facing, phase: number): string {
-  if (typeof art === "string") return art;
-  return playerImageKey(walkPose(phase), facing, art);
-}
-
-/** Events that ever show a character image, in stable mount order. The
- *  mounted art is the initially-active page's sprite (empty when that page
- *  has none); per-frame page selection swaps it later. */
+/** Events that ever show a character image, indexed in stable mount order. */
 function collectSlots(
-  maps: readonly MapDef[],
+  maps: ReadonlyMap<string, MapDef>,
   sprites: Sprites,
-  npcSrc: GameAssets["npcSrc"],
   order: readonly string[],
-): NpcSlot[] {
-  const slots: NpcSlot[] = [];
-  const initial = createSwitchState();
+): Map<string, GameEvent[]> {
+  const byMap = new Map<string, GameEvent[]>();
   for (const mapId of order) {
-    const map = maps.find((m) => m.id === mapId)!;
+    const map = maps.get(mapId);
+    if (!map) continue;
+    const slots: GameEvent[] = [];
     for (const ev of [...(map.events as GameEvent[])].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
       if (!ev.pages.some((p) => spritePaints(p.sprite != null ? sprites[p.sprite!] : undefined))) continue;
-      const active = activePage(ev, initial, mapId);
-      slots.push({ mapId, eventId: ev.id, key: `${mapId}/${ev.id}`, art: slotArt(sprites, npcSrc, active?.page.sprite) });
+      slots.push(ev);
     }
+    byMap.set(mapId, slots);
   }
-  return slots;
+  return byMap;
+}
+
+interface NpcRenderSlot {
+  node: NodeMirror;
+  px: number;
+  py: number;
+}
+
+type NpcFrame = [number, number, string, 16 | 32];
+
+function depthOrder(points: readonly (readonly [number, number, ...unknown[]])[], worldWidth: number): string {
+  const actors = points
+    .map((_, index) => index)
+    .sort((a, b) => actorDepth(points[a]![0]!, points[a]![1]!, worldWidth)
+      - actorDepth(points[b]![0]!, points[b]![1]!, worldWidth) || a - b);
+  return `${points.map((point) => Math.floor((Math.floor(point[1]!) - 2) / TILE))}|${actors}`;
+}
+
+function npcFrame(
+  state: SessionState,
+  event: GameEvent,
+  sprites: Sprites,
+  npcSrc: GameAssets["npcSrc"],
+): NpcFrame {
+  const active = activePage(event, state.sw, state.mapId, state.move.facing);
+  const name = active?.page.sprite;
+  const art: NpcArt | "" = name && spritePaints(sprites[name]) ? (npcSrc[name] ?? "") : "";
+  const ch = state.chars.chars[event.id];
+  return [
+    ch ? ch.px : event.x * TILE,
+    ch ? ch.py : event.y * TILE,
+    art === "" || typeof art === "string"
+      ? art
+      : playerImageKey(walkPose(ch ? ch.phase : 0), ch ? ch.facing : 0, art),
+    typeof art === "string" ? 16 : art.h,
+  ];
+}
+
+function npcStyle(height: 16 | 32, depth: number) {
+  return { posType: 1, insetL: 0, insetT: TILE - height, width: TILE, height, zIndex: depth };
+}
+
+/** The only mounted actor subtree. It owns enough stable image slots for any
+ *  transfer destination and rebinds them without replacing native nodes. */
+function CurrentMapActors(props: {
+  slots: () => readonly GameEvent[];
+  slotCount: number;
+  worldWidth: number;
+  sprites: Sprites;
+  npcSrc: GameAssets["npcSrc"];
+  player: GameAssets["player"];
+  playerHeight: 16 | 32;
+  pose: Accessor<WalkPose>;
+  facing: Accessor<Facing>;
+  state: () => SessionState;
+  worldNode: () => NodeMirror | undefined;
+  camera: () => CameraState;
+}) {
+  const initial = props.state();
+  let slots = props.slots();
+  const stride = props.worldWidth;
+  const npcs: NpcRenderSlot[] = Array.from({ length: props.slotCount }, (_, index) => {
+    const source = slots[index];
+    const frame = source
+      ? npcFrame(initial, source, props.sprites, props.npcSrc)
+      : [0, 0, "", 16] as const;
+    const node = createElement("image");
+    setProp(node, "style", npcStyle(frame[3], actorDepth(frame[0], frame[1], stride)));
+    setProp(node, "src", frame[2]);
+    if (source) setProp(node, "debugName", `rpgkit-npc-${source.id}`);
+    return { node, px: frame[0], py: frame[1] };
+  });
+
+  const [playerDepth, setPlayerDepth] = createSignal(actorDepth(initial.move.px, initial.move.py, stride));
+  let hero: NodeMirror | undefined;
+  let positions: JumpBatch | undefined;
+  let { px, py } = initial.move;
+  let { x: cx, y: cy } = props.camera();
+  let order = depthOrder(
+    [
+      [initial.move.px, initial.move.py],
+      ...npcs.slice(0, slots.length).map((npc) => [npc.px, npc.py] as const),
+    ],
+    stride,
+  );
+
+  const compilePositions = (): void => {
+    const worldNode = props.worldNode();
+    if (!worldNode || !hero) return;
+    const entries: [NodeMirror, "translateX" | "translateY"][] = [
+      [worldNode, "translateX"],
+      [worldNode, "translateY"],
+      [hero, "translateX"],
+      [hero, "translateY"],
+    ];
+    for (let index = 0; index < slots.length; index++) {
+      const npc = npcs[index]!;
+      entries.push([npc.node, "translateX"], [npc.node, "translateY"]);
+    }
+    positions = createJumpBatch(entries);
+    const state = props.state();
+    const camera = props.camera();
+    positions.set(0, -camera.x);
+    positions.set(1, -camera.y);
+    positions.set(2, state.move.px);
+    positions.set(3, state.move.py);
+    for (let index = 0; index < slots.length; index++) {
+      const npc = npcs[index]!;
+      positions!.set(4 + index * 2, npc.px);
+      positions!.set(5 + index * 2, npc.py);
+    }
+    positions.commit();
+    px = state.move.px;
+    py = state.move.py;
+    cx = camera.x;
+    cy = camera.y;
+  };
+
+  onMount(compilePositions);
+
+  onFrame(() => {
+    const state = props.state();
+    const next = props.slots();
+    const transfer = next !== slots;
+    if (transfer) slots = next;
+    let moved = false;
+    let dirty = transfer;
+    const camera = props.camera();
+    if (!transfer && (camera.x !== cx || camera.y !== cy)) {
+      positions?.set(0, -camera.x);
+      positions?.set(1, -camera.y);
+      moved = true;
+    }
+    if (!transfer && (state.move.px !== px || state.move.py !== py)) {
+      positions?.set(2, state.move.px);
+      positions?.set(3, state.move.py);
+      moved = true;
+      dirty = true;
+    }
+
+    const touched = transfer ? npcs.length : slots.length;
+    const frames: NpcFrame[] = [];
+    for (let index = 0; index < touched; index++) {
+      const source = slots[index];
+      const frame: NpcFrame = source
+        ? npcFrame(state, source, props.sprites, props.npcSrc)
+        : [0, 0, "", 16];
+      frames.push(frame);
+      const npc = npcs[index]!;
+      if (!transfer && source && (npc.px !== frame[0] || npc.py !== frame[1])) {
+        positions?.set(4 + index * 2, frame[0]);
+        positions?.set(5 + index * 2, frame[1]);
+        moved = true;
+        dirty = true;
+      }
+      npc.px = frame[0];
+      npc.py = frame[1];
+    }
+    let reorder = transfer;
+    if (dirty) {
+      const nextOrder = depthOrder([
+        [state.move.px, state.move.py],
+        ...frames.slice(0, slots.length),
+      ], stride);
+      reorder ||= order !== nextOrder;
+      order = nextOrder;
+    }
+    if (transfer) compilePositions();
+    else if (moved) positions?.commit();
+    if (reorder) setPlayerDepth(actorDepth(state.move.px, state.move.py, stride));
+    for (let index = 0; index < touched; index++) {
+      const frame = frames[index]!;
+      const npc = npcs[index]!;
+      const oldStyle = npc.node.domAttrs?.style as ReturnType<typeof npcStyle> | undefined;
+      setProp(npc.node, "src", frame[2], npc.node.domAttrs?.src as string | undefined);
+      setProp(npc.node, "style", npcStyle(frame[3],
+        slots[index] && reorder ? actorDepth(frame[0], frame[1], stride) : oldStyle?.zIndex ?? 0), oldStyle);
+      if (transfer) setProp(npc.node, "debugName", slots[index] ? `rpgkit-npc-${slots[index]!.id}` : undefined);
+    }
+    px = state.move.px;
+    py = state.move.py;
+    cx = camera.x;
+    cy = camera.y;
+  });
+
+  return (
+    <>
+      <PlayerSprite
+        pose={props.pose()}
+        facing={props.facing()}
+        frames={props.player}
+        height={props.playerHeight}
+        zIndex={playerDepth()}
+        debugName="rpgkit-player"
+        ref={(node) => {
+          hero = node;
+        }}
+      />
+      {npcs.map((npc) => npc.node as any)}
+    </>
+  );
 }
 
 // The view exposes its bare reducer state and camera to sim tests; the
@@ -158,14 +330,11 @@ export function GameView(props: {
   let state: SessionState = attract ? attract.state : startSession(project, session);
   globalThis.__rpgSessionState = state;
 
-  const slots = collectSlots(project.maps, (project.sprites ?? {}) as Sprites, assets.npcSrc, assets.order);
-  const slotIndex = new Map(slots.map((s, i) => [s.key, i]));
-  const slotsByMap = new Map<string, NpcSlot[]>();
-  for (const slot of slots) {
-    const group = slotsByMap.get(slot.mapId) ?? [];
-    group.push(slot);
-    slotsByMap.set(slot.mapId, group);
-  }
+  const mapsById = new Map(project.maps.map((map) => [map.id, map]));
+  const sprites = (project.sprites ?? {}) as Sprites;
+  const slotsByMap = collectSlots(mapsById, sprites, assets.order);
+  const actorSlotCount = Math.max(0, ...[...slotsByMap.values()].map((group) => group.length));
+  const worldWidth = Math.max(1, ...project.maps.map((map) => map.width * TILE));
 
   const [mapId, setMapId] = createSignal(state.mapId);
   const [pose, setPose] = createSignal<WalkPose>(walkPose(state.move.phase));
@@ -204,24 +373,6 @@ export function GameView(props: {
   };
   let camera = cameraFor(state);
   globalThis.__rpgGameCamera = camera;
-  // Per-slot resolved image src and frame height. A walker's src also moves
-  // with its live facing + mover phase, recomputed every frame below; a
-  // 32px frame anchors its bottom to the occupied tile (insetT = 16-h).
-  const initialNpcImage: Record<string, string> = {};
-  const initialNpcHeight: Record<string, 16 | 32> = {};
-  for (const slot of slots) {
-    initialNpcImage[slot.key] = typeof slot.art === "string"
-      ? slot.art
-      : playerImageKey(0, 0, slot.art);
-    initialNpcHeight[slot.key] = typeof slot.art === "string" ? 16 : slot.art.h;
-  }
-  const [npcImage, setNpcImage] = createSignal<Record<string, string>>(initialNpcImage);
-  const [npcHeight, setNpcHeight] = createSignal<Record<string, 16 | 32>>(initialNpcHeight);
-  // Mutable mirror of each slot's current art (string image or walker),
-  // updated by page swaps outside a signal diff so the per-frame pose pass
-  // can read it without re-deriving from project state.
-  const slotArtCurrent: Record<string, NpcArt | ""> = {};
-  for (const slot of slots) slotArtCurrent[slot.key] = slot.art;
   const [fade, setFade] = createSignal(0);
 
   // Live play fires reducer edges from the action handlers. Under the
@@ -246,54 +397,10 @@ export function GameView(props: {
     return { confirm: { label: m ? "next" : "talk", run: fire("confirm") } };
   });
 
-  // Precompiled position batch: world camera, player, then two props per NPC.
+  // The world camera and actor slots stay stable across transfers, so their
+  // coordinates can share one precompiled position batch.
   let worldNode: NodeMirror | undefined;
-  const playerRefs: (NodeMirror | undefined)[] = [];
-  const npcRefs: (NodeMirror | undefined)[] = slots.map(() => undefined);
-  let jumpBatch: JumpBatch | undefined;
   let prevButtons = 0;
-
-  onMount(() => {
-    const entries: [NodeMirror, "translateX" | "translateY"][] = [];
-    if (worldNode) {
-      entries.push([worldNode, "translateX"], [worldNode, "translateY"]);
-    }
-    if (playerRefs[0]) {
-      entries.push([playerRefs[0], "translateX"], [playerRefs[0], "translateY"]);
-    }
-    for (const ref of npcRefs) {
-      if (ref) entries.push([ref, "translateX"], [ref, "translateY"]);
-    }
-    jumpBatch = createJumpBatch(entries);
-    // Static initial framing so an idle first frame emits nothing.
-    jumpBatch.set(0, -camera.x);
-    jumpBatch.set(1, -camera.y);
-    jumpBatch.set(2, state.move.px);
-    jumpBatch.set(3, state.move.py);
-    slots.forEach((slot, i) => {
-      const ev = project.maps
-        .find((m) => m.id === slot.mapId)!
-        .events!.find((e) => e.id === slot.eventId)!;
-      jumpBatch!.set(4 + i * 2, ev.x * 16);
-      jumpBatch!.set(5 + i * 2, ev.y * 16);
-    });
-    jumpBatch.commit();
-  });
-
-  const mapsById = new Map(project.maps.map((m) => [m.id, m]));
-  const slotAt = (mapIdV: string, eventId: string): number | undefined =>
-    slotIndex.get(`${mapIdV}/${eventId}`);
-
-  // Position of an NPC on a given state snapshot: its live pixels while its
-  // map is current, otherwise its authored cell (a hidden container).
-  const npcXY = (st: SessionState, slot: NpcSlot): { px: number; py: number } => {
-    if (st.mapId === slot.mapId) {
-      const ch = st.chars.chars[slot.eventId];
-      if (ch) return { px: ch.px, py: ch.py };
-    }
-    const ev = mapsById.get(slot.mapId)!.events!.find((e) => e.id === slot.eventId)!;
-    return { px: ev.x * 16, py: ev.y * 16 };
-  };
 
   onFrame((buttons) => {
     const pressed = buttons & ~prevButtons;
@@ -332,75 +439,9 @@ export function GameView(props: {
     edge.confirm = false;
     edge.cancel = false;
 
-    // Positions and camera: one batch commit if any value changed. Only
-    // touched slots are rewritten, so a fully idle frame emits no batch.
-    // After a rewind/reset `prev` is a LATER state, so every displaced node
-    // differs and the same diff resyncs the whole playfield.
-    let moved = false;
-    if (state.move.px !== prev.move.px || state.move.py !== prev.move.py) {
-      jumpBatch?.set(2, state.move.px);
-      jumpBatch?.set(3, state.move.py);
-      moved = true;
-    }
-    for (const slot of slots) {
-      const a = npcXY(prev, slot);
-      const b = npcXY(state, slot);
-      if (a.px === b.px && a.py === b.py) continue;
-      const i = slotIndex.get(slot.key)!;
-      jumpBatch?.set(4 + i * 2, b.px);
-      jumpBatch?.set(5 + i * 2, b.py);
-      moved = true;
-    }
     const nextCamera = cameraFor(state);
-    if (nextCamera.x !== camera.x || nextCamera.y !== camera.y) {
-      jumpBatch?.set(0, -nextCamera.x);
-      jumpBatch?.set(1, -nextCamera.y);
-      moved = true;
-    }
     camera = nextCamera;
     globalThis.__rpgGameCamera = camera;
-    if (moved || status?.loopReset || status?.rewound) jumpBatch?.commit();
-
-    // Page-driven art swaps (chest lids, lit rune, gates) and, for walkers,
-    // the per-frame pose chosen from the live CharState facing + mover
-    // phase. An event whose active page loses its sprite paints nothing
-    // (opened thorn/iron gates): image "" -> setImage(-1).
-    const currentMap = project.maps.find((m) => m.id === state.mapId)!;
-    const liveArt = slotArtCurrent;
-    for (const ev of currentMap.events ?? []) {
-      const idx = slotAt(state.mapId, ev.id);
-      if (idx === undefined) continue;
-      const active = activePage(ev, state.sw, state.mapId, state.move.facing);
-      const want = slotArt((project.sprites ?? {}) as Sprites, assets.npcSrc, active?.page.sprite);
-      const key = `${state.mapId}/${ev.id}`;
-      if (liveArt[key] !== want) {
-        liveArt[key] = want;
-      }
-    }
-    // Resolve every CURRENT-map character's image from its live pose. A
-    // walker has no CharState only before the first sync; fall back to the
-    // down-facing idle frame then.
-    let nextImage: Record<string, string> | null = null;
-    let nextHeight: Record<string, 16 | 32> | null = null;
-    const oldImage = npcImage();
-    const oldHeight = npcHeight();
-    for (const slot of slotsByMap.get(state.mapId) ?? []) {
-      const key = slot.key;
-      const art = liveArt[key] ?? "";
-      const ch = state.chars.chars[slot.eventId];
-      const image = art === ""
-        ? ""
-        : characterImage(art, ch ? ch.facing : 0, ch ? ch.phase : 0);
-      const height: 16 | 32 = typeof art === "string" ? 16 : art.h;
-      if (oldImage[key] !== image) {
-        nextImage ??= { ...oldImage };
-        nextImage[key] = image;
-      }
-      if (oldHeight[key] !== height) {
-        nextHeight ??= { ...oldHeight };
-        nextHeight[key] = height;
-      }
-    }
 
     const op = fadeOpacity(state.fade);
     batch(() => {
@@ -410,8 +451,6 @@ export function GameView(props: {
       const nextPose = walkPose(state.move.phase);
       if (nextPose !== pose()) setPose(nextPose);
       if (state.move.facing !== facing()) setFacing(state.move.facing);
-      if (nextImage) setNpcImage(nextImage);
-      if (nextHeight) setNpcHeight(nextHeight);
       if (op !== fade()) setFade(op);
       const shownModal = attract ? attract.presentedModal() : state.interp.modal;
       setModal((m) => (modalChanged(m, shownModal) ? deepClone(shownModal) : m));
@@ -484,7 +523,7 @@ export function GameView(props: {
               camera={() => camera}
               viewport={() => viewport()}
               mapTiles={() => {
-                const m = project.maps.find((mm) => mm.id === mapId())!;
+                const m = mapsById.get(mapId())!;
                 return { w: m.width, h: m.height };
               }}
               debugName="rpgkit-anim-below"
@@ -492,78 +531,32 @@ export function GameView(props: {
             />
           ) : null}
 
-          {assets.order.map((mid) => (
-            <View
-              class="absolute"
-              style={{ posType: 1, insetL: 0, insetT: 0, display: mapId() === mid ? 0 : 1 }}
-              debugName={`rpgkit-npcs-${mid}`}
-            >
-              {slots
-                .filter((s) => s.mapId === mid)
-                .map((slot) => {
-                  const i = slotIndex.get(slot.key)!;
-                  const h = npcHeight()[slot.key] ?? 16;
-                  return (
-                    <Image
-                      src={npcImage()[slot.key]}
-                      class="absolute"
-                      style={{ posType: 1, insetL: 0, insetT: 16 - h, width: 16, height: h }}
-                      nodeRef={(n) => {
-                        npcRefs[i] = n;
-                      }}
-                    />
-                  );
-                })}
-            </View>
-          ))}
-
-          <PlayerSprite
-            pose={pose()}
-            facing={facing()}
-            frames={assets.player}
-            height={assets.playerHeight ?? 16}
-            ref={(n) => {
-              playerRefs[0] = n;
-            }}
-          />
-
-          {stream ? (
-            <StreamedChunkLayer
-              mapId={mapId()}
-              refs={stream.upper}
-              columns={stream.columns}
-              chunkPx={stream.chunkPx}
+          <OccludingUpperLayer
+            mapId={mapId()}
+            maps={mapsById}
+            assets={assets}
+            firstMapId={firstMapId}
+            camera={() => camera}
+            viewport={() => viewport()}
+            debugName="rpgkit-actors"
+            onStreamStats={(stats) => props.onStreamStats?.("upper", stats)}
+            onAnimatedStats={(stats) => props.onAnimatedStats?.("above", stats)}
+          >
+            <CurrentMapActors
+              slots={() => slotsByMap.get(state.mapId) ?? []}
+              slotCount={actorSlotCount}
+              worldWidth={worldWidth}
+              sprites={sprites}
+              npcSrc={assets.npcSrc}
+              player={assets.player}
+              playerHeight={assets.playerHeight ?? 16}
+              pose={pose}
+              facing={facing}
+              state={() => state}
+              worldNode={() => worldNode}
               camera={() => camera}
-              viewport={() => viewport()}
-              margin={stream.margin}
-              loadBudget={stream.loadBudget}
-              debugName="rpgkit-upper"
-              onStats={(stats) => props.onStreamStats?.("upper", stats)}
             />
-          ) : (
-            <ChunkLayer
-              names={assets.upper[mapId()] ?? assets.upper[firstMapId]!}
-              columns={assets.chunkColumns[mapId()] ?? assets.chunkColumns[firstMapId] ?? 1}
-              slots={assets.maxChunks}
-              debugName="rpgkit-upper"
-            />
-          )}
-
-          {assets.animated ? (
-            <AnimatedTiles
-              mapId={mapId()}
-              tiles={assets.animated}
-              above={true}
-              camera={() => camera}
-              viewport={() => viewport()}
-              mapTiles={() => {
-                const m = project.maps.find((mm) => mm.id === mapId())!;
-                return { w: m.width, h: m.height };
-              }}
-              debugName="rpgkit-anim-above"
-              onStats={(stats) => props.onAnimatedStats?.("above", stats)}
-            />
-          ) : null}
+          </OccludingUpperLayer>
         </View>
       </View>
 

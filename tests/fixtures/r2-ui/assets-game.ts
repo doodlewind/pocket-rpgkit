@@ -9,12 +9,12 @@ const WALKER = {
 };
 
 export const GAME_ASSETS: GameAssets = {
-  ground: { "r2-ui-field": ["assets/map-r2-ui-field-ground-0.png", "assets/map-r2-ui-field-ground-1.png", "assets/map-r2-ui-field-ground-2.png", "assets/map-r2-ui-field-ground-3.png"] },
-  upper: { "r2-ui-field": ["assets/map-r2-ui-field-upper-0.png", "assets/map-r2-ui-field-upper-1.png", "assets/map-r2-ui-field-upper-2.png", "assets/map-r2-ui-field-upper-3.png"] },
-  chunkColumns: { "r2-ui-field": 2 },
+  ground: { "r2-ui-field": ["assets/map-r2-ui-field-ground-0.png", "assets/map-r2-ui-field-ground-1.png", "assets/map-r2-ui-field-ground-2.png", "assets/map-r2-ui-field-ground-3.png"], "r2-ui-second": ["assets/map-r2-ui-field-ground-0.png", "assets/map-r2-ui-field-ground-1.png", "assets/map-r2-ui-field-ground-2.png", "assets/map-r2-ui-field-ground-3.png"] },
+  upper: { "r2-ui-field": ["assets/map-r2-ui-field-upper-0.png", "assets/map-r2-ui-field-upper-1.png", "assets/map-r2-ui-field-upper-2.png", "assets/map-r2-ui-field-upper-3.png"], "r2-ui-second": ["assets/map-r2-ui-second-upper-0.png", "assets/map-r2-ui-second-upper-1.png", "assets/map-r2-ui-second-upper-2.png", "assets/map-r2-ui-second-upper-3.png"] },
+  chunkColumns: { "r2-ui-field": 2, "r2-ui-second": 2 },
   maxChunks: 4,
-  world: { "r2-ui-field": { w: 1024, h: 640 } },
-  order: ["r2-ui-field"],
+  world: { "r2-ui-field": { w: 1024, h: 640 }, "r2-ui-second": { w: 1024, h: 640 } },
+  order: ["r2-ui-field", "r2-ui-second"],
   npcSrc: { walker: WALKER },
   player: WALKER,
   playerHeight: 32,

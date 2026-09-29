@@ -5,10 +5,16 @@
   "assets/map-r2-ui-field-upper-0.png": {
     "psm": 3
   },
+  "assets/map-r2-ui-second-upper-0.png": {
+    "psm": 3
+  },
   "assets/map-r2-ui-field-ground-1.png": {
     "psm": 3
   },
   "assets/map-r2-ui-field-upper-1.png": {
+    "psm": 3
+  },
+  "assets/map-r2-ui-second-upper-1.png": {
     "psm": 3
   },
   "assets/map-r2-ui-field-ground-2.png": {
@@ -17,10 +23,16 @@
   "assets/map-r2-ui-field-upper-2.png": {
     "psm": 3
   },
+  "assets/map-r2-ui-second-upper-2.png": {
+    "psm": 3
+  },
   "assets/map-r2-ui-field-ground-3.png": {
     "psm": 3
   },
   "assets/map-r2-ui-field-upper-3.png": {
+    "psm": 3
+  },
+  "assets/map-r2-ui-second-upper-3.png": {
     "psm": 3
   },
   "assets/walker-idle-0.png": {
