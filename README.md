@@ -47,7 +47,10 @@ grow`; Metal, captured on an Apple M5 Pro):
 
 ### `examples/wander` — an endless world that grows as you walk
 
-![Wander at 960x544: a grown town beside a snow border](tests/goldens/wander.960.2100.png)
+| | |
+| --- | --- |
+| ![Wander at 960x544: a grown town beside a snow border](tests/goldens/wander.960.2100.png) | ![Wander on macOS: a snow town, walking to a clicked tile](docs/screenshots/macos-wander.png) |
+| A grown town beside a snow border (sim golden) | On the macOS desktop host (`bun run desktop wander`), walking to a clicked tile |
 
 An unbounded 2D world streams in and out of memory around the walker.
 Nothing about it is stored: every 32×32-tile chunk is a pure function of
@@ -154,7 +157,7 @@ bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
 bun run build:example    # build meadow, sunstone, grow, wander, the editor and test fixtures into dist/
-bun test                 # TESTCOUNT tests incl. sim journeys and pixel goldens
+bun test                 # 548 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, wander, meadow; needs a Rust toolchain)
