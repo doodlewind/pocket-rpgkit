@@ -26,7 +26,7 @@ the parts an RPG-Maker-style game needs without any specific game:
   `GameAssets` manifest a game mounts;
 - **the format** (`src/data/schema.json`, v1; changes recorded in
   `src/data/CHANGELOG.md`);
-- **three examples** (`examples/`), each a PocketJS app with its own art
+- **four examples** (`examples/`), each a PocketJS app with its own art
   and tests on the wasm sim host (below);
 - **a tile-map editor, in preview** (`editor/`): paints the examples'
   documents on the desktop host ([below](#editor-preview)).
@@ -44,6 +44,59 @@ grow`; Metal, captured on an Apple M5 Pro):
 | | |
 | --- | --- |
 | ![Sunstone takeover on macOS](docs/screenshots/macos-sunstone-takeover.png) | ![Grow on macOS](docs/screenshots/macos-grow-growing.png) |
+
+### `examples/wander` — an endless world that grows as you walk
+
+![Wander at 960x544: a grown town beside a snow border](tests/goldens/wander.960.2100.png)
+
+An unbounded 2D world streams in and out of memory around the walker.
+Nothing about it is stored: every 32×32-tile chunk is a pure function of
+the seed and its coordinates (tested byte-identical in any generation
+order, after eviction, and at (±100000, ±100000)), so the only state is a
+cache. Biomes are low-frequency 2D noise cut into snow, grass, mud and
+sand, with grow's transition / blend / fringe seam art on every border;
+woods and meadows are grow's coordinate-hashed Ninja stamps.
+
+- **Regions and gates.** Every 96×96-tile region holds at most one town,
+  placed by hashed jitter with a chance by biome, and grown with grow's
+  rules in 2D (plaza, main and cross street, road-facing lots and a back
+  lane, the biome's work plot, one resident per house walking a road
+  route). Each shared region edge has a hashed gate that both sides
+  compute identically; each region runs its own trunk road from its town
+  (or a signposted crossroads) to its gates, so roads meet across region
+  borders without any global state.
+- **Growth.** When a town first enters the growth ring ahead of the
+  walker it grows over a few seconds — roads, then houses, fields,
+  residents — and its state at *t* seconds after discovery is "every cell
+  born by then". A bounded Bloom filter remembers what was seen; a region
+  met again shows complete.
+- **Rings.** The render ring (viewport plus overscan) is the only thing
+  mounted, as pooled native nodes with a hard cap (whole-stamp trees and
+  houses, 256 and 64 px fills, 16 px seams and roads). The load ring
+  generates chunks, the unload ring (load + hysteresis) evicts them, and a
+  hard LRU cap and byte estimate bound the cache. Generation is a work
+  queue ordered by distance to the focus (the walker plus a lead) and
+  alignment with the heading, spent in slices under a per-tick budget; an
+  unready chunk shows its biome's fill and fills in when it arrives.
+- **Walking.** The kit's unchanged engine plays a sliding 3×3-chunk window
+  emitted as a normal `rpgkit-project/v1` document. Entering a new chunk
+  re-centres it (a floating origin): the next window is built in budgeted
+  slices and the session state is translated, so positions stay small and
+  exact and nothing on screen moves. Houses, fences, props and tree trunks
+  block; canopies are walked under; residents walk their routes.
+- **Attract.** An auto-wander driver (A* over the window, preferring
+  roads) walks from town to town by itself. Any d-pad or face button takes
+  over; ten idle seconds hand the walk back. **SQUARE** grows a new seed,
+  **TRIANGLE** toggles fast travel, **SELECT** hands back at once, and a
+  tap walks to the tapped tile. The HUD shows the seed, world
+  coordinates, the chunk minimap (rendered / resident / queued / evicted,
+  with the load and unload rings) and the residency counters.
+
+Generation, discovery and the window swap all happen per 60 Hz reference
+tick, so the world, its residency and the auto-wander trajectory are
+identical at 60/30/20/4 Hz. The example bakes no new terrain: it points at
+grow's PNGs in place (`../grow/assets/...`) and adds only whole-stamp and
+64 px fill composites of them (`bun examples/wander/gen-assets.ts`).
 
 **`examples/meadow`** is the minimal example: one 20×12 map and four
 events proving the package boots, renders, replays deterministically,
@@ -100,11 +153,11 @@ cd pocket-rpgkit
 bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
-bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
-bun test                 # 519 tests incl. sim journeys and pixel goldens
+bun run build:example    # build meadow, sunstone, grow, wander, the editor and test fixtures into dist/
+bun test                 # TESTCOUNT tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
-                         # (also: grow, meadow; needs a Rust toolchain)
+                         # (also: grow, wander, meadow; needs a Rust toolchain)
 bun run web              # the browser site in dist/web (see above)
 ```
 
@@ -325,7 +378,8 @@ tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts) and
 tools/           example/editor build driver, desktop and editor launchers,
                  macOS packager (package-macos.ts), web site builder
                  (web.ts, web/, web-verify.ts)
-examples/        meadow (minimal), sunstone (game + attract), grow (demo);
+examples/        meadow (minimal), sunstone (game + attract), grow (demo),
+                 wander (endless streamed world);
                  each has its entry, data, assets/src, gen-assets.ts,
                  images.json, pocket.json and ATTRIBUTION.md
 editor/          tile-map editor (preview): app, engine/, ui/, its cooker
