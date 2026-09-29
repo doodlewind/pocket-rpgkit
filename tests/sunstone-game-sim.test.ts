@@ -398,9 +398,12 @@ simDescribe("sunstone — render budget", () => {
     // 297 KB against vendor/pocketjs 76ae741f: the game, the attract/
     // takeover/rewind controller and its frozen 539-frame tape, plus ~40 KB
     // of framework growth since the 780218d7 base the game was built on
-    // (the meadow example grew by the same amount). The bound catches an
-    // accidental bundle-in.
-    expect(jsBytes).toBeLessThan(320_000);
+    // (the meadow example grew by the same amount). Streamed map chunks
+    // (GameView's StreamedChunkLayer) and the extended event model (areas,
+    // compound and facing conditions, place, input lock) are part of the
+    // shared runtime every game bundles: 323 KB after both. The bound
+    // catches an accidental bundle-in.
+    expect(jsBytes).toBeLessThan(340_000);
   });
 });
 
