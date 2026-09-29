@@ -81,7 +81,24 @@ import {
 import { MOTION_HZ, motionTicksPerFrame } from "./motion-clock.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
 import { buildPassage, canStepFrom, stampBlockedCells } from "./passability.ts";
-import type { Dir, Facing, MapDef, MoveStep, Project, Sheet } from "./types.ts";
+import {
+  MAP_SCHEMA_HASH,
+  isProjectShell,
+  mapManifestHash,
+  validateMapIndex,
+  type MapContentIdentity,
+} from "./map-repository.ts";
+import type {
+  CommonEvent,
+  Dir,
+  Facing,
+  MapDef,
+  MapIndexEntry,
+  MapRepository,
+  MoveStep,
+  ProjectSource,
+  Sheet,
+} from "./types.ts";
 
 const DX = [0, -1, 0, 1] as const;
 const DY = [1, 0, -1, 0] as const;
@@ -142,38 +159,140 @@ export interface Session {
   hz: number;
   /** Fixed-rate reference ticks folded per host frame (MOTION_HZ / hz). */
   ticksPerFrame: number;
-  maps: ReadonlyMap<string, MapDef>;
-  worlds: ReadonlyMap<string, ReturnType<typeof createWorld>>;
-  tables: ReadonlyMap<string, PassageTable>;
+  /** Derived, mutable compile cache. It is deliberately outside
+   * SessionState, snapshots and reducer hashes. Inline projects retain all
+   * maps; sharded projects retain only the deterministic keep set. */
+  maps: Map<string, MapDef>;
+  worlds: Map<string, ReturnType<typeof createWorld>>;
+  tables: Map<string, PassageTable>;
+  /** Metadata for every sharded map without retaining any MapDef payload. */
+  mapIndex: ReadonlyMap<string, MapIndexEntry> | null;
+  /** Content identity copied into save envelopes for sharded projects. */
+  content: MapContentIdentity | null;
+  repository: MapRepository | null;
+  sheets: ReadonlyMap<string, Sheet>;
+  commonEvents: CommonEvent[];
 }
 
-export function createSession(project: Project, hz: number = MOTION_HZ): Session {
+/** Acquire, validate and compile one map into the derived session cache. */
+export function acquireSessionMap(sess: Session, id: string): MapDef {
+  const hit = sess.maps.get(id);
+  if (hit) return hit;
+  const expected = sess.mapIndex?.get(id);
+  const repository = sess.repository;
+  if (!expected || !repository) throw new Error(`map repository: unknown map ${id}`);
+  const actual = repository.meta(id);
+  if (!actual || actual.id !== expected.id || actual.width !== expected.width ||
+    actual.height !== expected.height || actual.entry !== expected.entry ||
+    actual.sha256 !== expected.sha256) {
+    throw new Error(`map repository: manifest metadata mismatch for ${id}`);
+  }
+  const map = repository.acquire(id);
+  if (map.id !== expected.id || map.width !== expected.width || map.height !== expected.height) {
+    throw new Error(`map repository: payload metadata mismatch for ${id}`);
+  }
+  // Compile into locals first. A throw leaves the live cache and simulation
+  // untouched, which is what an async caller needs before retrying a frame.
+  const world = createWorld(map, sess.commonEvents, MOTION_HZ);
+  const table = buildPassage(map, sess.sheets);
+  sess.maps.set(id, map);
+  sess.worlds.set(id, world);
+  sess.tables.set(id, table);
+  return map;
+}
+
+/** Prepare web-backed bytes (when supported) and compile them outside the
+ * reducer. The caller then retries the exact state/input pair that met a
+ * MapNotReadyError; no logical tick is consumed while this promise waits. */
+export async function prepareSessionMap(sess: Session, id: string): Promise<void> {
+  if (sess.maps.has(id)) return;
+  if (!sess.repository || !sess.mapIndex?.has(id)) {
+    throw new Error(`map repository: unknown map ${id}`);
+  }
+  await sess.repository.prepare?.(id);
+  acquireSessionMap(sess, id);
+}
+
+/** Deterministic cache policy for sharded projects: retain exactly the given
+ * ids, in caller-provided order. Inline projects keep their eager cache. */
+export function releaseSessionMapsExcept(sess: Session, ids: readonly string[]): void {
+  if (!sess.repository) return;
+  const keep = new Set(ids);
+  for (const id of [...sess.maps.keys()]) if (!keep.has(id)) sess.maps.delete(id);
+  for (const id of [...sess.worlds.keys()]) if (!keep.has(id)) sess.worlds.delete(id);
+  for (const id of [...sess.tables.keys()]) if (!keep.has(id)) sess.tables.delete(id);
+  sess.repository.releaseExcept(ids);
+}
+
+export function createSession(
+  project: ProjectSource,
+  hz: number = MOTION_HZ,
+  maps?: MapRepository,
+): Session {
   const sheets = new Map<string, Sheet>(project.sheets.map((s) => [s.id, s]));
-  const maps = new Map<string, MapDef>(project.maps.map((m) => [m.id, m]));
+  const commonEvents = [...(project.commonEvents ?? [])];
+  if (isProjectShell(project)) {
+    if (!maps) throw new Error("map repository: ProjectShell requires a MapRepository");
+    const index = validateMapIndex(project.mapIndex);
+    const manifest = mapManifestHash(project);
+    if (project.mapManifestHash !== undefined && project.mapManifestHash !== manifest) {
+      throw new Error("map repository: shell manifest hash mismatch");
+    }
+    if (project.mapSchemaHash !== undefined && project.mapSchemaHash !== MAP_SCHEMA_HASH) {
+      throw new Error("map repository: shell schema hash mismatch");
+    }
+    if (!index.has(project.start.map)) {
+      throw new Error(`map repository: start map ${project.start.map} is absent from mapIndex`);
+    }
+    const session: Session = {
+      cfg: { tile: project.tileSize, speed: 2 },
+      hz,
+      ticksPerFrame: motionTicksPerFrame(hz),
+      maps: new Map(),
+      worlds: new Map(),
+      tables: new Map(),
+      mapIndex: index,
+      content: { manifest, schema: MAP_SCHEMA_HASH },
+      repository: maps,
+      sheets,
+      commonEvents,
+    };
+    acquireSessionMap(session, project.start.map);
+    releaseSessionMapsExcept(session, [project.start.map]);
+    return session;
+  }
+  const inlineMaps = new Map<string, MapDef>(project.maps.map((m) => [m.id, m]));
   // Interpreter worlds compile at the FIXED motion reference: waits, text
   // reveal and fade frames are counted in reference ticks, and stepSession
   // folds MOTION_HZ/hz of them per host frame. Authored time then means the
   // same virtual time at every host rate.
   const worlds = new Map(
-    project.maps.map((m) => [m.id, createWorld(m, project.commonEvents ?? [], MOTION_HZ)]),
+    project.maps.map((m) => [m.id, createWorld(m, commonEvents, MOTION_HZ)]),
   );
   const tables = new Map(project.maps.map((m) => [m.id, buildPassage(m, sheets)]));
   return {
     cfg: { tile: project.tileSize, speed: 2 },
     hz,
     ticksPerFrame: motionTicksPerFrame(hz),
-    maps,
+    maps: inlineMaps,
     worlds,
     tables,
+    mapIndex: null,
+    content: null,
+    repository: null,
+    sheets,
+    commonEvents,
   };
 }
 
 export function startSession(
-  project: Project,
+  project: ProjectSource,
   session: Session,
   sw0?: SwitchState,
 ): SessionState {
   const start = project.start;
+  acquireSessionMap(session, start.map);
+  releaseSessionMapsExcept(session, [start.map]);
   if (sw0) {
     const interp = createInterpState(sw0);
     clearLocalBank(interp.sw);
@@ -531,9 +650,10 @@ function applyTransfer(
   y: number,
   dir: Dir | "keep",
 ): void {
-  if (!sess.maps.has(mapId)) throw new Error(`transfer: unknown map ${mapId}`);
+  acquireSessionMap(sess, mapId);
   const facing: Facing = dir === "keep" ? s.move.facing : DIR_INDEX[dir];
   enterMap(s, mapId, x, y, facing, sess.cfg);
+  releaseSessionMapsExcept(sess, [mapId]);
 }
 
 // ---------------------------------------------------------------------------

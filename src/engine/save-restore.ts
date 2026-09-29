@@ -22,6 +22,15 @@ import { MAX_FIBER_STACK_DEPTH } from "./interpreter.ts";
 import type { MapDef } from "./types.ts";
 import { isStandable, type PassageTable } from "./passability.ts";
 import type { SaveSnapshot } from "./save.ts";
+import { SaveError, decodeEnvelopeText } from "./save.ts";
+import { cloneInterp } from "./interpreter.ts";
+import { createChars } from "./chars.ts";
+import {
+  acquireSessionMap,
+  releaseSessionMapsExcept,
+  type Session,
+  type SessionState,
+} from "./session.ts";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -88,4 +97,37 @@ export function restoreProblem(
     }
   }
   return null;
+}
+
+/** Restore a decoded snapshot, acquiring an evicted destination map before
+ * validation. The repository and compile cache remain derived Session data;
+ * the returned reducer state contains only the saved map id and state. */
+export function restoreSessionSnapshot(
+  session: Session,
+  snap: SaveSnapshot,
+): SessionState {
+  const map = acquireSessionMap(session, snap.map);
+  const table = session.tables.get(snap.map)!;
+  const problem = restoreProblem(snap, map, table);
+  if (problem) throw new SaveError("shape", `save cannot be restored: ${problem}`);
+  const interp = cloneInterp(snap.interp);
+  const state: SessionState = {
+    frame: Math.floor(interp.frame / session.ticksPerFrame),
+    mapId: snap.map,
+    sw: interp.sw,
+    move: { ...snap.player },
+    chars: createChars(),
+    interp,
+    fade: null,
+    playerRoute: null,
+  };
+  releaseSessionMapsExcept(session, [snap.map]);
+  return state;
+}
+
+/** Decode with this session's content identity, then rebuild the target map
+ * cache and reducer state. A manifest/schema mismatch is rejected before any
+ * map bytes are acquired. */
+export function restoreSessionEnvelope(session: Session, text: string): SessionState {
+  return restoreSessionSnapshot(session, decodeEnvelopeText(text, session.content));
 }

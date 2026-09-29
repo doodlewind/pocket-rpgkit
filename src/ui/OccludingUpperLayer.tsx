@@ -88,6 +88,9 @@ export interface OccludingUpperLayerProps {
   maps: ReadonlyMap<string, MapDef>;
   assets: GameAssets;
   firstMapId: string;
+  /** Maximum map width in pixels. Required by sharded projects so depth
+   * ordering does not depend on which MapDefs happen to be resident. */
+  worldWidth?: number;
   camera: () => ChunkPoint;
   viewport: () => ChunkViewport;
   debugName?: string;
@@ -118,7 +121,8 @@ export function OccludingUpperLayer(props: OccludingUpperLayerProps): SolidJSX.E
   let currentMap = "";
   let mapWidth = 0;
   let mapHeight = 0;
-  const worldWidth = Math.max(1, ...[...props.maps.values()].map((map) => map.width * TILE));
+  const worldWidth = props.worldWidth
+    ?? Math.max(1, ...[...props.maps.values()].map((map) => map.width * TILE));
   let refs: readonly (string | null)[] = [];
   let names: readonly string[] = [];
   let columns = 0;

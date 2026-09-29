@@ -30,10 +30,12 @@
 // exact reducer path of a normal boot, so a rewound frame is definitionally
 // the same state as a freshly played one.
 
-import type { Project } from "./types.ts";
+import type { MapRepository, ProjectSource } from "./types.ts";
 import type { Modal } from "./interpreter.ts";
 import {
+  acquireSessionMap,
   createSession,
+  releaseSessionMapsExcept,
   startSession,
   stepSession,
   type Session,
@@ -117,6 +119,9 @@ export interface AttractOptions {
    *  SELECT then invokes onSelect instead of handing control to a tape. */
   attractEnabled?: boolean;
   onSelect?: () => void;
+  /** Required when project is a ProjectShell. Repository cache residency is
+   * derived and never enters the rewind timeline. */
+  maps?: MapRepository;
 }
 
 export interface AttractStatus {
@@ -149,7 +154,7 @@ export interface FoldResult {
 
 export class AttractController {
   private readonly session: Session;
-  private readonly project: Project;
+  private readonly project: ProjectSource;
   private readonly hz: number;
   private readonly timelineHz: number;
   private readonly idleFrames: number;
@@ -194,12 +199,12 @@ export class AttractController {
   loopReset = false;
   rewound = false;
 
-  constructor(project: Project, private readonly tape: readonly number[], opts: AttractOptions) {
+  constructor(project: ProjectSource, private readonly tape: readonly number[], opts: AttractOptions) {
     this.project = project;
     this.hz = opts.hz ?? 60;
     this.attractEnabled = opts.attractEnabled ?? true;
     this.timelineHz = this.attractEnabled ? (opts.tapeHz ?? ATTRACT_TAPE_HZ) : this.hz;
-    this.session = createSession(project, this.timelineHz);
+    this.session = createSession(project, this.timelineHz, opts.maps);
     this.idleFrames = opts.idleFrames ?? this.hz * 10;
     this.endHoldFrames = opts.endHoldFrames ?? this.timelineHz * 2;
     this.rewindFrames = Math.max(1, Math.round((opts.rewindSeconds ?? 3) * this.timelineHz));
@@ -449,8 +454,62 @@ export class AttractController {
   }
 
   /** One virtual frame. `liveButtons` is the raw held mask from the host;
-   *  the controller decides whether the tape or the player owns it. */
+   *  the controller decides whether the tape or the player owns it. A
+   *  repository miss rolls the whole host frame back, including low-rate
+   *  multi-fold bookkeeping, so a caller can prepare bytes and retry it. */
   step(liveButtons: number): FoldResult {
+    if (!this.session.repository?.prepare) return this.stepUnchecked(liveButtons);
+    const checkpoint = {
+      state: this.state,
+      phase: this.phase,
+      logBuf: this.logBuf,
+      timelineBuf: this.timelineBuf,
+      logLength: this.logLength,
+      firstDivergence: this.firstDivergence,
+      demoFrame: this.demoFrame,
+      endHold: this.endHold,
+      readHold: this.readHold,
+      displayTicks: this.displayTicks,
+      stage: this.stage,
+      carry: this.carry,
+      controlNotice: this.controlNotice,
+      rewindNotice: this.rewindNotice,
+      idle: this.idle,
+      lastFolded: this.lastFolded,
+      lastLive: this.lastLive,
+      loopReset: this.loopReset,
+      rewound: this.rewound,
+      residentMaps: [...this.session.maps.keys()],
+    };
+    try {
+      return this.stepUnchecked(liveButtons);
+    } catch (error) {
+      this.state = checkpoint.state;
+      this.phase = checkpoint.phase;
+      this.logBuf = checkpoint.logBuf;
+      this.timelineBuf = checkpoint.timelineBuf;
+      this.logLength = checkpoint.logLength;
+      this.firstDivergence = checkpoint.firstDivergence;
+      this.demoFrame = checkpoint.demoFrame;
+      this.endHold = checkpoint.endHold;
+      this.readHold = checkpoint.readHold;
+      this.displayTicks = checkpoint.displayTicks;
+      this.stage = checkpoint.stage;
+      this.carry = checkpoint.carry;
+      this.controlNotice = checkpoint.controlNotice;
+      this.rewindNotice = checkpoint.rewindNotice;
+      this.idle = checkpoint.idle;
+      this.lastFolded = checkpoint.lastFolded;
+      this.lastLive = checkpoint.lastLive;
+      this.loopReset = checkpoint.loopReset;
+      this.rewound = checkpoint.rewound;
+      for (const id of checkpoint.residentMaps) acquireSessionMap(this.session, id);
+      releaseSessionMapsExcept(this.session, checkpoint.residentMaps);
+      throw error;
+    }
+  }
+
+  private stepUnchecked(liveButtons: number): FoldResult {
     this.loopReset = false;
     this.rewound = false;
     const live = liveButtons >>> 0;

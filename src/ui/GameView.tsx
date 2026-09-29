@@ -40,14 +40,25 @@ import { centerOffset } from "../engine/viewport.ts";
 import {
   createSession,
   fadeOpacity,
+  prepareSessionMap,
   startSession,
   stepSession,
   type Session,
+  type SessionInput,
   type SessionState,
 } from "../engine/session.ts";
+import { isProjectShell, MapNotReadyError } from "../engine/map-repository.ts";
 import { AttractController, type AttractStatus } from "../engine/attract.ts";
 import { activePage, eventIdLess, modalChanged } from "../engine/interpreter.ts";
-import type { CameraState, Facing, GameEvent, MapDef, Project, SpriteDef } from "../engine/types.ts";
+import type {
+  CameraState,
+  Facing,
+  GameEvent,
+  MapDef,
+  MapRepository,
+  ProjectSource,
+  SpriteDef,
+} from "../engine/types.ts";
 import { PlayerSprite, playerImageKey } from "./PlayerSprite.tsx";
 import { walkPose, type WalkPose } from "../engine/movement.ts";
 import { TILE } from "../engine/tiles.ts";
@@ -72,23 +83,13 @@ function spritePaints(def: SpriteDef | undefined): boolean {
 }
 
 /** Events that ever show a character image, indexed in stable mount order. */
-function collectSlots(
-  maps: ReadonlyMap<string, MapDef>,
-  sprites: Sprites,
-  order: readonly string[],
-): Map<string, GameEvent[]> {
-  const byMap = new Map<string, GameEvent[]>();
-  for (const mapId of order) {
-    const map = maps.get(mapId);
-    if (!map) continue;
-    const slots: GameEvent[] = [];
-    for (const ev of [...(map.events as GameEvent[])].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
-      if (!ev.pages.some((p) => spritePaints(p.sprite != null ? sprites[p.sprite!] : undefined))) continue;
-      slots.push(ev);
-    }
-    byMap.set(mapId, slots);
+function collectMapSlots(map: MapDef, sprites: Sprites): GameEvent[] {
+  const slots: GameEvent[] = [];
+  for (const ev of [...(map.events as GameEvent[])].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
+    if (!ev.pages.some((p) => spritePaints(p.sprite != null ? sprites[p.sprite!] : undefined))) continue;
+    slots.push(ev);
   }
-  return byMap;
+  return slots;
 }
 
 interface NpcRenderSlot {
@@ -302,7 +303,10 @@ declare global {
 }
 
 export function GameView(props: {
-  project: Project;
+  project: ProjectSource;
+  /** Required with ProjectShell; omitted for backwards-compatible inline
+   * projects. Local repositories acquire synchronously. */
+  maps?: MapRepository;
   assets: GameAssets;
   /** One u16 button mask per 60 Hz source frame (engine/attract-tape.ts).
    *  Present: attract/takeover/rewind drive the fold. Absent: live play. */
@@ -317,6 +321,9 @@ export function GameView(props: {
   onStreamStats?: (layer: "ground" | "upper", stats: StreamedChunkLayerStats) => void;
   /** Optional diagnostics for viewport-mounted animated tile sprites. */
   onAnimatedStats?: (layer: "below" | "above", stats: AnimatedTilesStats) => void;
+  /** Browser repositories can report their frame barrier without putting
+   * network timing into SessionState. null means ticking has resumed. */
+  onMapLoading?: (mapId: string | null) => void;
 }) {
   const { project, assets } = props;
   const stream = assets.stream;
@@ -325,16 +332,43 @@ export function GameView(props: {
   const hz = simulationHz();
   // The controller folds the published 60 Hz tape on its source timeline
   // and maps each host frame onto that timeline.
-  const attract = props.attractTape ? new AttractController(project, [...props.attractTape], { hz }) : null;
-  const session: Session = attract ? attract.getSession() : createSession(project, hz);
+  const attract = props.attractTape
+    ? new AttractController(project, [...props.attractTape], { hz, maps: props.maps })
+    : null;
+  const session: Session = attract ? attract.getSession() : createSession(project, hz, props.maps);
   let state: SessionState = attract ? attract.state : startSession(project, session);
   globalThis.__rpgSessionState = state;
 
-  const mapsById = new Map(project.maps.map((map) => [map.id, map]));
+  const mapsById = session.maps;
   const sprites = (project.sprites ?? {}) as Sprites;
-  const slotsByMap = collectSlots(mapsById, sprites, assets.order);
-  const actorSlotCount = Math.max(0, ...[...slotsByMap.values()].map((group) => group.length));
-  const worldWidth = Math.max(1, ...project.maps.map((map) => map.width * TILE));
+  const initialMap = mapsById.get(state.mapId)!;
+  const slotCache = new Map<string, GameEvent[]>([[state.mapId, collectMapSlots(initialMap, sprites)]]);
+  const inlineMaxActors = isProjectShell(project)
+    ? 0
+    : Math.max(0, ...project.maps.map((map) => collectMapSlots(map, sprites).length));
+  const actorSlotCount = Math.max(slotCache.get(state.mapId)!.length, assets.maxActors ?? inlineMaxActors);
+  const dimensions = isProjectShell(project)
+    ? project.mapIndex
+    : project.maps.map((map) => ({ id: map.id, width: map.width, height: map.height }));
+  const dimensionsById = new Map(dimensions.map((map) => [map.id, map]));
+  const worldWidth = Math.max(1, ...dimensions.map((map) => map.width * TILE));
+  const currentSlots = (): readonly GameEvent[] => {
+    for (const id of [...slotCache.keys()]) if (!mapsById.has(id)) slotCache.delete(id);
+    let slots = slotCache.get(state.mapId);
+    if (!slots) {
+      const map = mapsById.get(state.mapId);
+      if (!map) throw new Error(`GameView: map ${JSON.stringify(state.mapId)} is not resident`);
+      slots = collectMapSlots(map, sprites);
+      if (slots.length > actorSlotCount) {
+        throw new Error(
+          `GameView: map ${JSON.stringify(state.mapId)} needs ${slots.length} actor slots; ` +
+          `GameAssets.maxActors is ${actorSlotCount}`,
+        );
+      }
+      slotCache.set(state.mapId, slots);
+    }
+    return slots;
+  };
 
   const [mapId, setMapId] = createSignal(state.mapId);
   const [pose, setPose] = createSignal<WalkPose>(walkPose(state.move.phase));
@@ -353,8 +387,14 @@ export function GameView(props: {
   const [viewport, setViewport] = createSignal(
     vp0 ? { w: vp0.w, h: vp0.h } : { w: SCREEN_W, h: SCREEN_H },
   );
-  const firstMapId = assets.order[0]!;
-  const mapSize = (id: string): { w: number; h: number } => assets.world[id] ?? assets.world[firstMapId]!;
+  const firstMapId = project.start.map;
+  const mapSize = (id: string): { w: number; h: number } => {
+    const assetSize = assets.world[id];
+    if (assetSize) return assetSize;
+    const indexed = dimensionsById.get(id);
+    if (!indexed) throw new Error(`GameView: unknown map size ${JSON.stringify(id)}`);
+    return { w: indexed.width * TILE, h: indexed.height * TILE };
+  };
   const worldFrame = () => {
     const vp = viewport();
     const size = mapSize(mapId());
@@ -401,12 +441,17 @@ export function GameView(props: {
   // coordinates can share one precompiled position batch.
   let worldNode: NodeMirror | undefined;
   let prevButtons = 0;
+  let blocked: {
+    buttons: number;
+    input?: SessionInput;
+    ready: boolean;
+    error?: unknown;
+  } | null = null;
 
   onFrame((buttons) => {
     const pressed = buttons & ~prevButtons;
     const upEdge = !!(pressed & BTN.UP);
     const downEdge = !!(pressed & BTN.DOWN);
-    prevButtons = buttons;
 
     // Pick up a desktop window resize before this frame's layout reads the
     // centering offset (hostViewport stays the one runtime fact).
@@ -422,18 +467,43 @@ export function GameView(props: {
     // mask, takeover, rewind and the idle attract entry all resolve inside it.
     const prev = state;
     let status: AttractStatus | null = null;
-    if (attract) {
-      const result = attract.step(buttons);
-      state = result.state;
-      status = result.status;
-    } else {
-      state = stepSession(session, state, {
-        buttons,
-        confirmEdge: edge.confirm,
-        cancelEdge: edge.cancel,
-        upEdge,
-        downEdge,
-      });
+    if (blocked) {
+      if (blocked.error) throw blocked.error;
+      if (!blocked.ready) return;
+    }
+    const frameButtons = blocked?.buttons ?? buttons;
+    const input: SessionInput = blocked?.input ?? {
+      buttons: frameButtons,
+      confirmEdge: edge.confirm,
+      cancelEdge: edge.cancel,
+      upEdge,
+      downEdge,
+    };
+    try {
+      if (attract) {
+        const result = attract.step(frameButtons);
+        state = result.state;
+        status = result.status;
+      } else {
+        state = stepSession(session, state, input);
+      }
+      prevButtons = frameButtons;
+      if (blocked) props.onMapLoading?.(null);
+      blocked = null;
+    } catch (error) {
+      if (!(error instanceof MapNotReadyError) || !session.repository?.prepare) throw error;
+      const pending: NonNullable<typeof blocked> = {
+        buttons: frameButtons,
+        ...(attract ? {} : { input }),
+        ready: false,
+      };
+      blocked = pending;
+      props.onMapLoading?.(error.mapId);
+      void prepareSessionMap(session, error.mapId).then(
+        () => { pending.ready = true; },
+        (reason) => { pending.error = reason; },
+      );
+      return;
     }
     globalThis.__rpgSessionState = state;
     edge.confirm = false;
@@ -536,6 +606,7 @@ export function GameView(props: {
             maps={mapsById}
             assets={assets}
             firstMapId={firstMapId}
+            worldWidth={worldWidth}
             camera={() => camera}
             viewport={() => viewport()}
             debugName="rpgkit-actors"
@@ -543,7 +614,7 @@ export function GameView(props: {
             onAnimatedStats={(stats) => props.onAnimatedStats?.("above", stats)}
           >
             <CurrentMapActors
-              slots={() => slotsByMap.get(state.mapId) ?? []}
+              slots={currentSlots}
               slotCount={actorSlotCount}
               worldWidth={worldWidth}
               sprites={sprites}

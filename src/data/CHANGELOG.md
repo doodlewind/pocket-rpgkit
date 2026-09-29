@@ -106,5 +106,21 @@ fields and commands are optional and the v1 spellings keep their meaning.
   host rate); a blocked step waits and replans at most `retries` times
   before the route ends.
 
+## v1 amendment — 2026-09-29 (on-demand map entries)
+
+- A project may retain the original inline `maps` array or replace it with a
+  `mapIndex`. Each index entry identifies one independently addressable map by
+  `id`, `width`, `height`, `entry` and canonical-JSON `sha256`; optional
+  `mapManifestHash` and `mapSchemaHash` bind saves to the exact content build.
+  Existing inline documents and saves keep their original behavior.
+- `ProjectShell` plus `MapRepository` loads only the starting map and the
+  destination of each transfer. Parsed map data, compiled interpreter worlds,
+  passage tables and render residency are derived caches, not project state or
+  save data. A restore reacquires its saved map; a manifest/schema mismatch is
+  rejected before map acquisition.
+- An async-backed repository may prepare missing bytes outside the reducer.
+  The UI pauses and retries the same input frame after preparation, so network
+  timing cannot alter the simulation timeline.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

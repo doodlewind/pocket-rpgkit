@@ -275,6 +275,43 @@ export interface Project {
   maps: MapDef[];
 }
 
+/** One independently addressable map payload in a sharded project. The
+ * checksum is SHA-256 over canonical UTF-8 JSON for the MapDef. */
+export interface MapIndexEntry {
+  id: string;
+  width: number;
+  height: number;
+  entry: string;
+  sha256: string;
+}
+
+/** A large-project document keeps global data inline but moves MapDef
+ * payloads into independently addressable entries. The optional hashes are
+ * emitted by the kit splitter; runtimes also recompute them, so hand-built
+ * shells remain usable without weakening save compatibility checks. */
+export interface ProjectShell extends Omit<Project, "maps"> {
+  mapIndex: readonly MapIndexEntry[];
+  mapManifestHash?: string;
+  mapSchemaHash?: string;
+}
+
+export type ProjectSource = Project | ProjectShell;
+
+/** Synchronous map acquisition at the simulation boundary. A browser-backed
+ * implementation may expose prepare(); acquire() then throws MapNotReadyError
+ * until those bytes are resident. Callers pause and retry the same logical
+ * input frame after prepare() resolves. */
+export interface MapRepository {
+  meta(id: string): MapIndexEntry | undefined;
+  /** Return a schema-validated MapDef. Implementations that decode untyped
+   * bytes should validate before returning; createJsonMapRepository is the
+   * standard JSON implementation. Session additionally verifies repository
+   * metadata and payload dimensions against mapIndex. */
+  acquire(id: string): MapDef;
+  releaseExcept(ids: readonly string[]): void;
+  prepare?(id: string): Promise<void>;
+}
+
 /** Pure simulation state for the camera slice. Position is the world-space
  *  top-left of the camera in pixels; the player focus stays screen-centered
  *  (its world position is cam + viewport center). */

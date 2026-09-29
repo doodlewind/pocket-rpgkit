@@ -60,6 +60,10 @@ export interface GameAssets {
   chunkColumns: Readonly<Record<string, number>>;
   /** Maximum chunk slots mounted for one map. */
   maxChunks: number;
+  /** Maximum simultaneously visible NPC image slots on one map. A sharded
+   * project should provide this scalar because unloaded MapDefs cannot be
+   * scanned at view construction. Inline projects may omit it. */
+  maxActors?: number;
   /** Map id -> map size in pixels. */
   world: Readonly<Record<string, { w: number; h: number }>>;
   /** Map ids in NPC-container mount order. */

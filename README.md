@@ -240,6 +240,50 @@ optional sprite, motion (`moveType` or an authored `moveRoute`), and a
 command list. `src/data/schema.json` is normative and
 `src/engine/types.ts` carries the matching TypeScript types.
 
+### Large projects: maps as on-demand entries
+
+Small games keep using an inline `project.maps` array. A large game can use
+`splitProjectMaps(project)` from `tools/lib/map-project.ts` to emit a compact
+`ProjectShell` plus one canonical JSON entry per map. The shell replaces
+`maps` with `mapIndex`; every index record carries the map id, dimensions,
+entry name and SHA-256. Both output order and bytes are stable, so importers
+can write `files` directly to independent files or addressable pak data
+entries.
+
+At runtime, pass the shell and a repository together:
+
+```ts
+import { readFileSync } from "@pocketjs/framework/fs";
+import { createJsonMapRepository } from "./vendor/pocket-rpgkit/src/engine/map-repository.ts";
+
+const repository = createJsonMapRepository(project.mapIndex, {
+  read: (entry) => readFileSync(entry, "utf8"),
+});
+
+mount(() => <GameView
+  project={project}
+  maps={repository}
+  assets={{ ...GAME_ASSETS, maxActors: MAX_ACTORS_ON_ANY_MAP }}
+/>);
+```
+
+`createSession(project, hz, repository)` synchronously validates and compiles
+only the starting map. A transfer acquires its destination, then evicts the
+old parsed map, interpreter world and passage table. These caches and the
+view's current-map actor list are derived data: they are absent from reducer
+state, replay hashes and saves. For a shell project, save envelopes carry the
+shell manifest and map-schema identities; `restoreSessionEnvelope` rejects a
+different content build before acquiring the saved map, or reacquires that
+map if it was evicted.
+
+A browser source may return `undefined` from `read` and implement async
+`prepare(entry)`. Keep the start entry ready before mounting. On a later miss,
+`GameView` pauses input and simulation, calls `prepare`, and retries the exact
+same host frame; `onMapLoading(mapId | null)` can drive a loading indicator.
+Fetch completion order therefore never enters simulation state. Custom
+repositories must give `acquire` the same synchronous, schema/checksum-
+validated contract as `createJsonMapRepository`.
+
 ### The 18 commands
 
 | op | purpose |

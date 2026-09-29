@@ -158,7 +158,12 @@ export function gameManifestSource(opts: {
   generator: string;
   /** Module specifier of src/ui/game-assets.ts from the manifest. */
   typesImport: string;
-  maps: readonly { id: string; width: number; height: number }[];
+  maps: readonly {
+    id: string;
+    width: number;
+    height: number;
+    events?: readonly { pages: readonly { sprite?: string | null }[] }[];
+  }[];
   /** Page.sprite key -> baked character image, in manifest order. */
   npcSrc: readonly (readonly [string, string])[];
   player: PlayerFrameNames;
@@ -172,6 +177,11 @@ export function gameManifestSource(opts: {
   const chunkCount = (m: { width: number; height: number }): number =>
     Math.ceil(m.width / CHUNK_TILES) * Math.ceil(m.height / CHUNK_TILES);
   const maxChunks = Math.max(1, ...opts.maps.map(chunkCount));
+  const drawableSprites = new Set(opts.npcSrc.map(([key]) => key));
+  const maxActors = Math.max(0, ...opts.maps.map((m) =>
+    m.events?.filter((event) =>
+      event.pages.some((page) => page.sprite != null && drawableSprites.has(page.sprite)),
+    ).length ?? 0));
   const frames = (name: string, names: readonly string[]): string => {
     if (names.length !== 4) throw new Error(`gameManifestSource: ${name} needs 4 facings, got ${names.length}`);
     return `export const ${name}: readonly [string, string, string, string] = [\n${table(names.map((n) => q(n)))}\n];\n\n`;
@@ -214,6 +224,7 @@ export function gameManifestSource(opts: {
     `  upper: MAP_UPPER,\n` +
     `  chunkColumns: MAP_CHUNK_COLUMNS,\n` +
     `  maxChunks: MAP_MAX_CHUNKS,\n` +
+    `  maxActors: ${maxActors},\n` +
     `  world: MAP_WORLD,\n` +
     `  order: MAP_ORDER,\n` +
     `  npcSrc: NPC_SRC,\n` +

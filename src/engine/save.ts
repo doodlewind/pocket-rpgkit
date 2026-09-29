@@ -28,6 +28,7 @@ import type { InterpState } from "./interpreter.ts";
 import { cloneInterp, isBusy } from "./interpreter.ts";
 import { keyedRecord } from "./clone.ts";
 import { envelopeConsistent, validateSnapshot } from "./save-validate.ts";
+import type { MapContentIdentity } from "./map-repository.ts";
 
 export const SAVE_FORMAT = "rpgkit-save/v1" as const;
 export const SAVE_VERSION = 1 as const;
@@ -110,6 +111,8 @@ export interface SaveEnvelope {
   frame: number;
   /** FNV-1a 32-bit (8 hex chars) over canonical JSON of `state`. */
   checksum: string;
+  /** Sharded-project build identity. Envelope metadata, not reducer state. */
+  content?: MapContentIdentity;
   state: SaveSnapshot;
 }
 
@@ -118,6 +121,7 @@ export type SaveErrorCode =
   | "format"
   | "version"
   | "checksum"
+  | "content"
   | "shape";
 
 export class SaveError extends Error {
@@ -183,13 +187,17 @@ function stringifyCanonical(value: unknown): unknown {
   return value;
 }
 
-export function encodeEnvelope(snapshot: SaveSnapshot): string {
+export function encodeEnvelope(
+  snapshot: SaveSnapshot,
+  content?: MapContentIdentity | null,
+): string {
   const state = cloneSnapshot(snapshot);
   const envelope: SaveEnvelope = {
     format: SAVE_FORMAT,
     version: SAVE_VERSION,
     frame: state.interp.frame,
     checksum: fnv1aText(canonicalJson(state)),
+    ...(content ? { content: { ...content } } : {}),
     state,
   };
   return JSON.stringify(envelope);
@@ -202,8 +210,11 @@ const B64URL_INV: Record<string, number> = {};
 for (let i = 0; i < B64URL.length; i++) B64URL_INV[B64URL[i]!] = i;
 
 /** URL-safe base64 without padding; whitespace tolerant on the way back. */
-export function encodeSaveCode(snapshot: SaveSnapshot): string {
-  const bytes = utf8Encode(encodeEnvelope(snapshot));
+export function encodeSaveCode(
+  snapshot: SaveSnapshot,
+  content?: MapContentIdentity | null,
+): string {
+  const bytes = utf8Encode(encodeEnvelope(snapshot, content));
   let out = "";
   for (let i = 0; i < bytes.length; i += 3) {
     const b0 = bytes[i]!;
@@ -217,7 +228,10 @@ export function encodeSaveCode(snapshot: SaveSnapshot): string {
   return out;
 }
 
-export function decodeSaveCode(code: string): SaveSnapshot {
+export function decodeSaveCode(
+  code: string,
+  expectedContent?: MapContentIdentity | null,
+): SaveSnapshot {
   const clean = code.replace(/\s+/g, "");
   if (clean.length === 0) throw new SaveError("bad-json", "save code is empty");
   const bytes: number[] = [];
@@ -238,7 +252,7 @@ export function decodeSaveCode(code: string): SaveSnapshot {
   }
   const text = utf8Decode(new Uint8Array(bytes));
   if (text === null) throw new SaveError("bad-json", "save code is not valid UTF-8");
-  return decodeEnvelopeText(text);
+  return decodeEnvelopeText(text, expectedContent);
 }
 
 /** Strict UTF-8 decode: validate lead/continuation bytes, overlong forms,
@@ -289,7 +303,10 @@ function utf8Decode(bytes: Uint8Array): string | null {
 
 // --- decode + validate ------------------------------------------------------
 
-export function decodeEnvelopeText(text: string): SaveSnapshot {
+export function decodeEnvelopeText(
+  text: string,
+  expectedContent?: MapContentIdentity | null,
+): SaveSnapshot {
   let envelope: SaveEnvelope;
   try {
     envelope = JSON.parse(text) as SaveEnvelope;
@@ -307,6 +324,24 @@ export function decodeEnvelopeText(text: string): SaveSnapshot {
       "version",
       `save version ${String(envelope.version)} is not loadable by version ${SAVE_VERSION}`,
     );
+  }
+  if (envelope.content !== undefined && (
+    envelope.content === null || typeof envelope.content !== "object" ||
+    typeof envelope.content.manifest !== "string" ||
+    typeof envelope.content.schema !== "string"
+  )) {
+    throw new SaveError("shape", "save content identity is malformed");
+  }
+  if (expectedContent) {
+    if (!envelope.content) {
+      throw new SaveError("content", "save has no content identity for this sharded project");
+    }
+    if (envelope.content.manifest !== expectedContent.manifest) {
+      throw new SaveError("content", "save map manifest hash does not match this content build");
+    }
+    if (envelope.content.schema !== expectedContent.schema) {
+      throw new SaveError("content", "save map schema hash does not match this runtime");
+    }
   }
   const snapshot = envelope.state;
   if (!isSnapshotShape(snapshot)) {
@@ -385,8 +420,12 @@ export interface SlotSummary {
  *  runs the SAME full validation as a load (format/version/checksum/
  *  structural/frame consistency), so a bad file lists as an error instead
  *  of a healthy selectable slot (F5/task-1173). */
-export function summarizeEnvelope(slot: number, text: string): SlotSummary & { checksum: string } {
-  const snapshot = decodeEnvelopeText(text);
+export function summarizeEnvelope(
+  slot: number,
+  text: string,
+  expectedContent?: MapContentIdentity | null,
+): SlotSummary & { checksum: string } {
+  const snapshot = decodeEnvelopeText(text, expectedContent);
   const envelope = JSON.parse(text) as SaveEnvelope;
   return {
     slot,
@@ -405,12 +444,21 @@ export interface SaveStore {
   remove?(slot: number): void;
 }
 
-export function saveToStore(store: SaveStore, slot: number, snapshot: SaveSnapshot): void {
-  store.write(slot, encodeEnvelope(snapshot));
+export function saveToStore(
+  store: SaveStore,
+  slot: number,
+  snapshot: SaveSnapshot,
+  content?: MapContentIdentity | null,
+): void {
+  store.write(slot, encodeEnvelope(snapshot, content));
 }
 
-export function loadFromStore(store: SaveStore, slot: number): SaveSnapshot {
+export function loadFromStore(
+  store: SaveStore,
+  slot: number,
+  expectedContent?: MapContentIdentity | null,
+): SaveSnapshot {
   const text = store.read(slot);
   if (text === null) throw new SaveError("bad-json", `slot ${slot} is empty`);
-  return decodeEnvelopeText(text);
+  return decodeEnvelopeText(text, expectedContent);
 }

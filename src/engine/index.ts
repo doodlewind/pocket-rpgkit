@@ -22,6 +22,7 @@ export * from "./attract.ts";
 export * from "./tape.ts";
 export * from "./journey-search.ts";
 export * from "./schema-validate.ts";
+export * from "./map-repository.ts";
 export * from "./save.ts";
 export * from "./save-validate.ts";
 export * from "./save-restore.ts";
