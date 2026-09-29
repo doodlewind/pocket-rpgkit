@@ -12,7 +12,8 @@ the parts an RPG-Maker-style game needs without any specific game:
 - **Solid UI components** (`src/ui/`) — `GameView`, a complete game screen
   for a project (chunked maps, follow camera, NPCs, dialog, fades, and
   optional attract mode), plus the blocks it is made of: `DialogBox`,
-  `PlayerSprite`, `ChunkLayer`, `StreamedChunkLayer`, `SaveMenu`, `Panel`.
+  `PlayerSprite`, `ChunkLayer`, `StreamedChunkLayer`, `AnimatedTiles`,
+  `SaveMenu`, `Panel`.
   The framed ones take a
   colour theme, and `DialogBox` shows speaker portraits;
 - **attract mode** (`src/engine/attract.ts`) — after 10 idle seconds a
@@ -24,7 +25,8 @@ the parts an RPG-Maker-style game needs without any specific game:
   attract-tape override loader;
 - **build-time asset pipelines** (`tools/lib/`) — tile sheets to baked
   512px PSM_4444 canvases and chunks, or 256px CLUT8+RLE streamed chunks,
-  static walker frames, and the `GameAssets` manifest a game mounts;
+  native animated-tile atlases, 16×16 or 16×32 static walker frames, and
+  the `GameAssets` manifest a game mounts;
 - **the format** (`src/data/schema.json`, v1; changes recorded in
   `src/data/CHANGELOG.md`);
 - **four examples** (`examples/`), each a PocketJS app with its own art
@@ -383,6 +385,76 @@ texture-byte, upload, free, pool and pending counts. `chunkWindow` from the
 engine package exposes the same clamped viewport arithmetic for tooling and
 tests.
 
+### Animated map tiles and 16×32 walkers
+
+`GameView` also accepts `GameAssets.animated`, keyed by map id. Each row
+names a tile coordinate, whether it belongs below or above characters, and
+a sprite atlas registered in the app's `sprites.json`:
+
+```ts
+animated: {
+  town: [
+    { x: 11, y: 13, above: false, sprite: "assets/anim/water-0.png" },
+    { x: 18, y: 7, above: true, sprite: "assets/anim/torch-0.png" },
+  ],
+}
+```
+
+`AnimatedTiles` mounts only cells intersecting the viewport plus a one-tile
+ring, reuses image nodes after scrolling, and keeps separate below- and
+above-character bands. It binds each node to the native sprite atlas; JS
+does not advance animation frames and animated tiles never enter reducer or
+save state. Atlas timing therefore lives in `sprites.json` as 60 Hz
+reference vblanks:
+
+```json
+{
+  "assets/anim/water-0.png": {
+    "cols": 4, "rows": 1, "frames": 4, "step": 12, "psm": 3
+  }
+}
+```
+
+`cookAnimationAtlases` in `tools/lib/animated.ts` takes 16×16 RGBA frame
+sequences, merges byte-identical sequences with the same timing, pads each
+atlas to a power-of-two width, and returns its PNG bytes, `sprites.json`
+rows, and sequence-to-sprite map. `animatedManifestSource` serializes the
+placements for `GameAssets`. The first frame's `durationMs` becomes
+`round(durationMs / 1000 * 60)`; a sequence with unequal authored durations
+uses that first duration because a native atlas has one constant step.
+Animated atlases stay PSM_8888 (`psm: 3`).
+
+Character animation stays reducer-owned. `loadWalkerSheet` in
+`tools/lib/bake.ts` cuts a 3-column × 4-row sheet of 16×32 cells into twelve
+static PNGs. The default source layout is rows down/left/right/up and columns
+walk-left/idle/walk-right; the emitted engine order is down/left/up/right.
+Put the resulting frames in `GameAssets.player` or an `npcSrc` walker and
+set its height:
+
+```ts
+const WALKER = {
+  idle: [downIdle, leftIdle, upIdle, rightIdle],
+  walkL: [downL, leftL, upL, rightL],
+  walkR: [downR, leftR, upR, rightR],
+  h: 32 as const,
+};
+
+const assets: GameAssets = {
+  // map fields omitted
+  player: WALKER,
+  playerHeight: 32,
+  npcSrc: { sailor: WALKER },
+};
+```
+
+The project sprite may retain its build-time sheet id with
+`{ "kind": "walker", "sheet": "sailor", "h": 32, "cols": 3, "rows": 4 }`;
+the runtime paints only the cooked frame names in `GameAssets`. Player and
+NPC images anchor their bottom edge to the occupied 16px tile. Their facing
+and left/idle/right pose come from the saved mover state, while the upper
+map layer and `above: true` animations paint over the part extending into
+the tile above.
+
 ### Themes and speaker portraits
 
 `DialogBox`, `SaveMenu` and `GameView` take an optional `theme`, a
@@ -446,12 +518,13 @@ src/engine/      pure runtime (types, motion-clock, movement, passability,
                  interpreter, chars, session, camera, viewport, chunk-window,
                  tiles, save*, schema-validate, attract, tape, journey-search)
 src/data/        schema.json (normative) + CHANGELOG
-src/ui/          GameView, ChunkLayer, StreamedChunkLayer, DialogBox,
-                 PlayerSprite, SaveMenu, Panel, theme (UiTheme, speaker prefixes)
+src/ui/          GameView, ChunkLayer, StreamedChunkLayer, AnimatedTiles,
+                 DialogBox, PlayerSprite, SaveMenu, Panel, theme
+                 (UiTheme, speaker prefixes)
 src/host/        data.fs save adapter, attract-tape loader
 tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts,
-                 stream.ts) and the desktop-host build/launch helper
-                 (desktop.ts)
+                 stream.ts, animated.ts) and the desktop-host build/launch
+                 helper (desktop.ts)
 tools/           example/editor build driver, desktop and editor launchers,
                  macOS packager (package-macos.ts), web site builder
                  (web.ts, web/, web-verify.ts)
