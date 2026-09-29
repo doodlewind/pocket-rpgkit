@@ -223,7 +223,8 @@ describe("grow: timeline seek", () => {
         JSON.parse(JSON.stringify(grown)),
       );
     }
-  });
+    // ~4 s alone (two full folds per k); a loaded machine needs the headroom.
+  }, 30_000);
 
   test("live action boundaries equal a fresh scrub, including camera position", () => {
     // At these rates a 0.2-second growth deadline falls on an exact frame.

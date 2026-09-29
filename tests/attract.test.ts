@@ -435,8 +435,10 @@ describe("D2 — rewind cost (option a: pure re-fold from frame 0)", () => {
     // metadata packs display state into one flag byte per timeline tick.
     expect(c.inputLogAllocatedBytes).toBe(ATTRACT_INPUT_LOG_FRAMES * Uint16Array.BYTES_PER_ELEMENT);
     expect(c.historyAllocatedBytes).toBe(ATTRACT_INPUT_LOG_FRAMES * 3);
-    // Loose threshold for CI noise; the measured number lands in the claim.
-    expect(ms).toBeLessThan(100);
+    // Loose threshold for CI noise: ~40 ms here, ~200 ms on a machine with
+    // every core busy, so this still catches an order-of-magnitude
+    // regression. The measured number lands in the claim.
+    expect(ms).toBeLessThan(400);
     console.log(
       `attract rewind: 1820-frame re-fold at frame 2000 = ${ms.toFixed(2)} ms ` +
       `(${(ms / 1820).toFixed(4)} ms/frame); input log allocation = ` +
