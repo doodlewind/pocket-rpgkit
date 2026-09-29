@@ -61,6 +61,7 @@ export function canSave(player: MovementState, interp: InterpState): boolean {
     interp.modal === null &&
     interp.pendingTransfer === null &&
     interp.pendingMoveRoutes.length === 0 &&
+    interp.pendingPlacements.length === 0 &&
     interp.abortedRoutes.length === 0
   );
 }
@@ -95,6 +96,7 @@ function normalizeInterp(snap: SaveSnapshot): SaveSnapshot {
   snap.interp.cues = [];
   snap.interp.pendingTransfer = null;
   snap.interp.pendingMoveRoutes = [];
+  snap.interp.pendingPlacements = [];
   snap.interp.abortedRoutes = [];
   return snap;
 }
@@ -314,6 +316,11 @@ export function decodeEnvelopeText(text: string): SaveSnapshot {
   if (typeof envelope.checksum !== "string" || envelope.checksum !== expected) {
     throw new SaveError("checksum", "save checksum mismatch (truncated or edited)");
   }
+  // The event-model additions extended the existing v1 snapshot rather
+  // than changing its envelope version. Hydrate only fields absent from an
+  // older checksum-valid v1 save; an explicitly malformed value remains in
+  // place for the deep validator to reject below.
+  hydrateLegacyV1(snapshot);
   // Checksum proved the bytes are intact, not that they form a legal
   // session: fully validate structure, ranges and save-time invariants
   // before anything can restore from this snapshot (F4/task-1173).
@@ -326,6 +333,17 @@ export function decodeEnvelopeText(text: string): SaveSnapshot {
   // so legacy v1 saves keep the same wire bytes while every external-id
   // dictionary regains the runtime's null prototype.
   return cloneSnapshot(snapshot);
+}
+
+function hydrateLegacyV1(snapshot: SaveSnapshot): void {
+  const interp = snapshot.interp as InterpState & {
+    inputLocked?: boolean;
+    placements?: InterpState["placements"];
+    pendingPlacements?: InterpState["pendingPlacements"];
+  };
+  if (interp.inputLocked === undefined) interp.inputLocked = false;
+  if (interp.placements === undefined) interp.placements = keyedRecord();
+  if (interp.pendingPlacements === undefined) interp.pendingPlacements = [];
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

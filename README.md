@@ -5,7 +5,7 @@ built on [PocketJS](https://github.com/pocket-stack/pocketjs). It contains
 the parts an RPG-Maker-style game needs without any specific game:
 
 - **pure-TS engine** (`src/engine/`) — tile movement and collision, the
-  event interpreter (pages, triggers, 15 commands), map-character motion,
+  event interpreter (pages, triggers, 18 commands), map-character motion,
   multi-map sessions, deterministic save snapshots. No host imports, no
   wall clock, no `Math.random`: a session is one pure fold per virtual
   frame, so a button tape replays byte-for-byte on every host;
@@ -236,7 +236,7 @@ optional sprite, motion (`moveType` or an authored `moveRoute`), and a
 command list. `src/data/schema.json` is normative and
 `src/engine/types.ts` carries the matching TypeScript types.
 
-### The 15 commands
+### The 18 commands
 
 | op | purpose |
 | --- | --- |
@@ -245,7 +245,7 @@ command list. `src/data/schema.json` is normative and
 | `switch` | set a global switch |
 | `variable` | set/add/sub or a seeded random range |
 | `selfSwitch` | set the event-local A/B/C/D flag |
-| `if` | condition over switch/variable/selfSwitch/item/gold, with `else` |
+| `if` | condition over switch/variable/selfSwitch/item/gold/facing, with `else` |
 | `transfer` | swap maps at x/y/dir, with an optional fade |
 | `moveRoute` | force the player or this event through a step list |
 | `wait` | virtual-time pause (seconds, compiled against `simulationHz`) |
@@ -255,13 +255,21 @@ command list. `src/data/schema.json` is normative and
 | `erase` | remove this event for the rest of the map visit |
 | `exit` | end this fiber |
 | `common` | run a common event's command list |
+| `lockInput` / `unlockInput` | cross-event input lock; freezes the mover and action but not autorun/parallel |
+| `place` | relocate `"this"` or a named event to a tile, optionally facing a direction |
 
 Triggers: `action` (confirm on the faced or occupied tile),
 `playerTouch` (on cell entry), `autorun` (blocking, restarts after it
-finishes), `parallel` (concurrent fiber per active page). Conditions
-compile to forward jumps; no command can express a loop, and the runtime
-backstops a hand-crafted cyclic program with a fatal interpreter error
-instead of hanging the frame loop.
+finishes), `parallel` (concurrent fiber per active page). An event may
+occupy a rectangle (`w`/`h`, default 1×1): touch fires on entry into any
+cell and action fires when the faced or occupied cell is inside it. A page
+condition may use the flat fields or `all: Condition[]` (AND); a
+`{kind:"facing", dir}` clause gates by the player's facing and makes a
+touch page re-fire on a turn in place. Switch/variable ids prefixed
+`local.` reset on every map entry; a page `dir` sets the character's
+initial facing. Conditions compile to forward jumps; no command can
+express a loop, and the runtime backstops a hand-crafted cyclic program
+with a fatal interpreter error instead of hanging the frame loop.
 
 ## Using it in your own project
 

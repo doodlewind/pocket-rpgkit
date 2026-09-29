@@ -113,7 +113,12 @@ function keyedValue<T>(record: Readonly<Record<string, T>>, key: string): T | un
 
 // --- conditions and page selection ------------------------------------------
 
-export function evalCondition(c: Condition, s: SwitchState, eventKey: string): boolean {
+export function evalCondition(
+  c: Condition,
+  s: SwitchState,
+  eventKey: string,
+  facing?: Facing,
+): boolean {
   switch (c.kind) {
     case "switch":
       return (keyedValue(s.switches, c.id) ?? false) === (c.value ?? true);
@@ -133,10 +138,35 @@ export function evalCondition(c: Condition, s: SwitchState, eventKey: string): b
       return (keyedValue(s.items, c.id) ?? 0) >= c.count;
     case "gold":
       return s.gold >= c.amount;
+    case "facing":
+      // A facing condition needs a live player direction. Callers that do
+      // not have one cannot prove the condition and therefore fail it.
+      return facing !== undefined && facing === FACING_OF_DIR[c.dir];
   }
 }
 
-export function pageConditionHolds(p: Page, s: SwitchState, eventKey: string): boolean {
+const FACING_OF_DIR: Record<Dir, Facing> = { down: 0, left: 1, up: 2, right: 3 };
+
+/** True when every clause of a `condition.all` list holds. */
+function allClausesHold(clauses: Condition[], s: SwitchState, eventKey: string, facing?: Facing): boolean {
+  for (const c of clauses) {
+    if (!evalCondition(c, s, eventKey, facing)) return false;
+  }
+  return true;
+}
+
+/** A page whose `all` list contains a facing clause: such a playerTouch
+ *  page re-fires when the player turns in place. */
+export function pageReadsFacing(p: Page): boolean {
+  return p.condition?.all?.some((c) => c.kind === "facing") ?? false;
+}
+
+export function pageConditionHolds(
+  p: Page,
+  s: SwitchState,
+  eventKey: string,
+  facing?: Facing,
+): boolean {
   const c = p.condition;
   if (!c) return true;
   if (c.switch !== undefined && !(keyedValue(s.switches, c.switch) ?? false)) return false;
@@ -150,18 +180,21 @@ export function pageConditionHolds(p: Page, s: SwitchState, eventKey: string): b
     if (op === "!=" && !(v !== value)) return false;
   }
   if (c.item !== undefined && (keyedValue(s.items, c.item) ?? 0) < 1) return false;
+  if (c.all && !allClausesHold(c.all, s, eventKey, facing)) return false;
   return true;
 }
 
-/** Highest-index page whose condition holds (R2 §2); null when none do. */
+/** Highest-index page whose condition holds (R2 §2); null when none do.
+ *  Callers must supply `facing` when an event can use a facing condition. */
 export function activePage(
   ev: GameEvent,
   s: SwitchState,
   mapId: string,
+  facing?: Facing,
 ): { page: Page; index: number } | null {
   const key = eventKey(mapId, ev.id);
   for (let i = ev.pages.length - 1; i >= 0; i--) {
-    if (pageConditionHolds(ev.pages[i]!, s, key)) return { page: ev.pages[i]!, index: i };
+    if (pageConditionHolds(ev.pages[i]!, s, key, facing)) return { page: ev.pages[i]!, index: i };
   }
   return null;
 }
@@ -213,6 +246,9 @@ export type Instr =
   | { op: "se"; name: string; volume: number; pitch: number }
   | { op: "erase" }
   | { op: "exit" }
+  | { op: "lockInput" }
+  | { op: "unlockInput" }
+  | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir: Dir | null }
   | { op: "transfer"; map: string; x: number; y: number; dir: Dir | "keep"; fadeFrames: number }
   | { op: "moveRoute"; target: "player" | "this"; wait: boolean; route: MoveRoute }
   | { op: "common"; id: string };
@@ -281,6 +317,21 @@ export function compile(cmds: readonly Command[], hz: number = TICK_HZ): Prog {
         case "exit":
           emit({ op: "exit" });
           break;
+        case "lockInput":
+          emit({ op: "lockInput" });
+          break;
+        case "unlockInput":
+          emit({ op: "unlockInput" });
+          break;
+        case "place":
+          emit({
+            op: "place",
+            target: c.target,
+            x: c.x,
+            y: c.y,
+            dir: c.dir ?? null,
+          });
+          break;
         case "transfer":
           emit({
             op: "transfer",
@@ -322,6 +373,10 @@ export interface InterpInput {
   prevCell: Cell;
   /** 0 down, 1 left, 2 up, 3 right — action triggers fire one tile ahead. */
   facing: Facing;
+  /** Facing at the START of this frame, before the mover turned. A
+   *  difference from `facing` is a turn-in-place edge, which re-fires a
+   *  facing-reading playerTouch page. Defaults to `facing`. */
+  prevFacing?: Facing;
   /** Live cells of map characters this frame (P1④ NPC motion); event id ->
    *  cell. Events absent from the record stand on their authored x/y. */
   eventCells?: Record<string, Cell>;
@@ -408,6 +463,18 @@ export interface PendingMoveRoute {
   wait: boolean;
 }
 
+/** A `place` command published on THIS step. The session
+ *  relocates the matching CharState after the fold; the durable position
+ *  also lands in InterpState.placements so a later-created character (a
+ *  page that only becomes active afterwards) spawns at the new cell. */
+export interface PendingPlacement {
+  eventId: string;
+  x: number;
+  y: number;
+  /** Facing to show after the move, or keep the current one. */
+  dir: Dir | null;
+}
+
 interface Fiber {
   key: string;
   pageIndex: number;
@@ -425,6 +492,12 @@ export interface World {
   /** Programs are compiled once for this immutable project's id/content. */
   commonPrograms: ReadonlyMap<string, Prog>;
   pagePrograms: ReadonlyMap<string, readonly Prog[]>;
+  /** Event order and spatial candidates are compiled once with the world.
+   *  Trigger scans then inspect only the current/faced cells plus events
+   *  whose autorun/parallel pages or live positions require a dynamic scan. */
+  eventsById?: ReadonlyMap<string, GameEvent>;
+  cellEvents?: ReadonlyMap<number, readonly GameEvent[]>;
+  alwaysScanEvents?: readonly GameEvent[];
 }
 
 export interface InterpError {
@@ -442,6 +515,14 @@ export interface InterpState {
   erased: Record<string, true>;
   /** playerTouch latches: set on entry, cleared once the player leaves. */
   touched: Record<string, true>;
+  /** Cross-event input lock. While true the mover ignores the
+   *  d-pad and action presses start no event; autorun/parallel still fold.
+   *  Per map visit (the interpreter rebuilds on entry). */
+  inputLocked: boolean;
+  /** Durable per-visit event position overrides from `place`
+   *  commands: event id -> tile + facing. syncPages spawns a later-created
+   *  character here instead of the authored x/y. Cleared on map entry. */
+  placements: Record<string, { x: number; y: number; dir: Dir | null }>;
   /** Sound cues emitted on this frame; the host drains them after step. */
   cues: SoundCue[];
   pendingTransfer: PendingTransfer | null;
@@ -449,6 +530,8 @@ export interface InterpState {
    *  publish more than one before it parks (a fire-and-forget player turn
    *  immediately followed by a waited self-route); the session drains all. */
   pendingMoveRoutes: PendingMoveRoute[];
+  /** `place` requests published on THIS step, in command order. */
+  pendingPlacements: PendingPlacement[];
   /** Keys of PARALLEL fibers canceled on THIS step because their page
    *  stopped being the active page (condition failed, a higher page took
    *  over, or the event was erased). A key parked in "external" mode names
@@ -474,9 +557,12 @@ export function createInterpState(sw: SwitchState = createSwitchState()): Interp
     modal: null,
     erased: keyedRecord(),
     touched: keyedRecord(),
+    inputLocked: false,
+    placements: keyedRecord(),
     cues: [],
     pendingTransfer: null,
     pendingMoveRoutes: [],
+    pendingPlacements: [],
     abortedRoutes: [],
   };
 }
@@ -488,7 +574,31 @@ export function createWorld(map: MapDef, common: CommonEvent[] = [], hz: number 
   for (const event of map.events ?? []) {
     pagePrograms.set(eventKey(map.id, event.id), event.pages.map((page) => compile(page.commands, hz)));
   }
-  return { hz, map, commonPrograms, pagePrograms };
+  const orderedEvents = [...(map.events ?? [])]
+    .sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1));
+  const eventsById = new Map(orderedEvents.map((ev) => [ev.id, ev]));
+  const cellEvents = new Map<number, GameEvent[]>();
+  const alwaysScanEvents: GameEvent[] = [];
+  for (const ev of orderedEvents) {
+    if (ev.pages.some((page) => page.trigger === "autorun" || page.trigger === "parallel")) {
+      alwaysScanEvents.push(ev);
+    }
+    const w = ev.w ?? 1;
+    const h = ev.h ?? 1;
+    const x0 = Math.max(0, ev.x);
+    const y0 = Math.max(0, ev.y);
+    const x1 = Math.min(map.width, ev.x + w);
+    const y1 = Math.min(map.height, ev.y + h);
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const cell = y * map.width + x;
+        const events = cellEvents.get(cell);
+        if (events) events.push(ev);
+        else cellEvents.set(cell, [ev]);
+      }
+    }
+  }
+  return { hz, map, commonPrograms, pagePrograms, eventsById, cellEvents, alwaysScanEvents };
 }
 
 /** True while the blocking interpreter owns the session: player movement
@@ -508,6 +618,14 @@ export function cloneModal(m: Modal | null): Modal | null {
 
 function cloneMoveRoute(route: MoveRoute): MoveRoute {
   return { ...route, steps: [...route.steps] };
+}
+
+function clonePlacements(
+  src: Readonly<Record<string, { x: number; y: number; dir: Dir | null }>>,
+): Record<string, { x: number; y: number; dir: Dir | null }> {
+  const out = keyedRecord<{ x: number; y: number; dir: Dir | null }>();
+  for (const key of Object.keys(src)) out[key] = { ...src[key]! };
+  return out;
 }
 
 function cloneFiber(f: Fiber): Fiber {
@@ -541,12 +659,15 @@ export function cloneInterp(s0: InterpState): InterpState {
     modal: cloneModal(s0.modal),
     erased: keyedRecord(s0.erased),
     touched: keyedRecord(s0.touched),
+    inputLocked: s0.inputLocked,
+    placements: clonePlacements(s0.placements),
     cues: s0.cues.map((cue) => ({ ...cue })),
     pendingTransfer: s0.pendingTransfer ? { ...s0.pendingTransfer } : null,
     pendingMoveRoutes: s0.pendingMoveRoutes.map((r) => ({
       ...r,
       route: cloneMoveRoute(r.route),
     })),
+    pendingPlacements: s0.pendingPlacements.map((p) => ({ ...p })),
     abortedRoutes: [...s0.abortedRoutes],
   };
   if (s0.error) s.error = { ...s0.error };
@@ -563,8 +684,79 @@ const FRONT: Record<Facing, [number, number]> = {
   3: [1, 0], // right
 };
 
-function at(a: Cell, c: Cell): boolean {
-  return a.x === c.x && a.y === c.y;
+/** The live top-left of an event's area rectangle: its moving character
+ *  cell, else a durable `place` override, else the authored (x,y). */
+function eventOrigin(ev: GameEvent, s: InterpState, input: InterpInput): Cell {
+  return (
+    (input.eventCells ? keyedValue(input.eventCells, ev.id) : undefined) ??
+    keyedValue(s.placements, ev.id) ??
+    { x: ev.x, y: ev.y }
+  );
+}
+
+interface Rect {
+  x0: number;
+  y0: number;
+  x1: number; // inclusive
+  y1: number; // inclusive
+}
+
+/** An event's w×h area. Defaults to 1×1. A zero-width or
+ *  zero-height area contains no cell: Tuxemon's boundary.py treats such a
+ *  box as never matching, so the event can never touch/action-fire. */
+function eventRect(ev: GameEvent, origin: Cell): Rect | null {
+  const w = ev.w ?? 1;
+  const h = ev.h ?? 1;
+  if (w < 1 || h < 1) return null;
+  return { x0: origin.x, y0: origin.y, x1: origin.x + w - 1, y1: origin.y + h - 1 };
+}
+
+function cellInRect(c: Cell, r: Rect): boolean {
+  return c.x >= r.x0 && c.x <= r.x1 && c.y >= r.y0 && c.y <= r.y1;
+}
+
+function indexedEventsAt(w: World, cell: Cell): readonly GameEvent[] {
+  if (cell.x < 0 || cell.y < 0 || cell.x >= w.map.width || cell.y >= w.map.height) return [];
+  return w.cellEvents?.get(cell.y * w.map.width + cell.x) ?? [];
+}
+
+function worldEventById(w: World, id: string): GameEvent | undefined {
+  return w.eventsById?.get(id) ?? (w.map.events ?? []).find((ev) => ev.id === id);
+}
+
+/** Events that can react this frame, in deterministic event-id order.
+ *  Authored areas come from the per-cell index. Autorun/parallel pages are
+ *  always eligible, while placed or moving events are added dynamically
+ *  because their live rectangle no longer matches the authored index. */
+function triggerCandidates(s: InterpState, w: World, input: InterpInput): GameEvent[] {
+  // Keep structural compatibility for callers that construct a World
+  // directly instead of using createWorld(): without an index, conservatively
+  // scan every event in the same deterministic order as the original fold.
+  if (!w.eventsById || !w.cellEvents || !w.alwaysScanEvents) {
+    return [...(w.map.events ?? [])]
+      .sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1));
+  }
+  const byId = new Map<string, GameEvent>();
+  const add = (events: readonly GameEvent[]): void => {
+    for (const ev of events) byId.set(ev.id, ev);
+  };
+  add(w.alwaysScanEvents);
+  add(indexedEventsAt(w, input.playerCell));
+  const [fx, fy] = FRONT[input.facing];
+  add(indexedEventsAt(w, { x: input.playerCell.x + fx, y: input.playerCell.y + fy }));
+  for (const id of Object.keys(s.placements)) {
+    const ev = w.eventsById.get(id);
+    if (ev) byId.set(id, ev);
+  }
+  if (input.eventCells) {
+    for (const id of Object.keys(input.eventCells)) {
+      const ev = w.eventsById.get(id);
+      const cell = input.eventCells[id]!;
+      if (ev && (cell.x !== ev.x || cell.y !== ev.y)) byId.set(id, ev);
+    }
+  }
+  return [...byId.values()]
+    .sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1));
 }
 
 function startFiber(
@@ -592,13 +784,11 @@ function startFiber(
  *  run to completion: a `wait` past the cancellation frame never applies.
  *  A canceled fiber parked on an external route reports its key so the
  *  session can abort the matching player/event move route. */
-function cancelStaleParallels(s: InterpState, w: World): void {
-  const events = w.map.events ?? [];
-  const byKey = new Map(events.map((ev) => [eventKey(w.map.id, ev.id), ev]));
+function cancelStaleParallels(s: InterpState, w: World, facing: Facing): void {
   for (const key of Object.keys(s.parallels)) {
     const f = s.parallels[key]!;
-    const ev = byKey.get(key);
-    const active = ev && !s.erased[key] ? activePage(ev, s.sw, w.map.id) : null;
+    const ev = worldEventById(w, key.slice(w.map.id.length + 1));
+    const active = ev && !s.erased[key] ? activePage(ev, s.sw, w.map.id, facing) : null;
     // Same page still active: keep running. A page change (index differs)
     // cancels; scanTriggers restarts a fiber for the new page on this step.
     if (active && active.index === f.pageIndex) continue;
@@ -609,22 +799,33 @@ function cancelStaleParallels(s: InterpState, w: World): void {
 }
 
 function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
-  const events = w.map.events ?? [];
-  const cellOf = (ev: GameEvent): Cell =>
-    (input.eventCells ? keyedValue(input.eventCells, ev.id) : undefined) ?? ev;
-  // Release touch latches once the player has walked off the event cell.
-  for (const ev of events) {
-    const key = eventKey(w.map.id, ev.id);
-    if (!at(cellOf(ev), input.playerCell)) delete s.touched[key];
+  const rectOf = (ev: GameEvent): Rect | null => eventRect(ev, eventOrigin(ev, s, input));
+  const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
+  const prevFacing = input.prevFacing ?? input.facing;
+  const turned = prevFacing !== input.facing;
+  // Release touch latches. A latch only blocks a re-fire while the player
+  // stands on the SAME cell: stepping to another cell releases it even when
+  // that cell is still inside the area (every step into an area cell
+  // is a fresh entry), and walking off releases it outright.
+  for (const key of Object.keys(s.touched)) {
+    const ev = worldEventById(w, key.slice(w.map.id.length + 1));
+    if (!ev) {
+      delete s.touched[key];
+      continue;
+    }
+    const r = rectOf(ev);
+    if (moved || !r || !cellInRect(input.playerCell, r)) delete s.touched[key];
   }
   // Ascending event-id order so parallel starts and the blocking-fiber
   // choice are deterministic across frames. The order is explicit UTF-16
   // code units (eventIdLess), never localeCompare, whose collation differs
   // between the Bun and QuickJS hosts (review C12).
-  for (const ev of [...events].sort((a, b) => (eventIdLess(a.id, b.id) ? -1 : a.id === b.id ? 0 : 1))) {
+  for (const ev of triggerCandidates(s, w, input)) {
     const key = eventKey(w.map.id, ev.id);
     if (s.erased[key]) continue;
-    const active = activePage(ev, s.sw, w.map.id);
+    // Page selection sees the live player facing, so a `facing` clause
+    // gates the page by direction.
+    const active = activePage(ev, s.sw, w.map.id, input.facing);
     if (!active) continue;
     const { page, index } = active;
     // A page with no commands has no fiber: an opened gate's touch page and
@@ -638,23 +839,34 @@ function scanTriggers(s: InterpState, w: World, input: InterpInput): void {
       continue;
     }
     if (s.main) continue; // one blocking fiber at a time
-    const ec = cellOf(ev);
     if (page.trigger === "autorun") {
       s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
-    } else if (page.trigger === "action" && input.confirmEdge) {
+    } else if (page.trigger === "action") {
+      // While the cross-event input lock is held, confirm presses
+      // start no event (the cutscene owns control); autorun/parallel above
+      // still run.
+      if (s.inputLocked || !input.confirmEdge) continue;
       // MV parity: action button starts the event one tile in FRONT of the
       // player (NPCs block the tile; below-character signs are faced, not
-      // stood on) OR the event sharing the player's cell (a below-character
-      // plate the player walked onto). Live NPC cells come from the P1④
-      // motion reducer, so a wandering NPC is talkable wherever it stopped.
+      // stood on) OR sharing the player's cell (a plate the player walked
+      // onto). With an area either tile may lie anywhere in the
+      // w×h rect, so a multi-cell counter is confirmable from any edge.
+      const r = rectOf(ev);
+      if (!r) continue;
       const [fx, fy] = FRONT[input.facing];
       const front = { x: input.playerCell.x + fx, y: input.playerCell.y + fy };
-      if (at(ec, front) || at(ec, input.playerCell)) {
+      if (cellInRect(front, r) || cellInRect(input.playerCell, r)) {
         s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
       }
     } else if (page.trigger === "playerTouch") {
-      const moved = input.prevCell.x !== input.playerCell.x || input.prevCell.y !== input.playerCell.y;
-      if (at(ec, input.playerCell) && moved && !s.touched[key]) {
+      const r = rectOf(ev);
+      if (!r || !cellInRect(input.playerCell, r)) continue;
+      // Entry/step edge: moved onto an unlatched area cell.
+      const stepEdge = moved && !s.touched[key];
+      // Turn edge: a page whose condition reads facing re-fires when
+      // the player turns in place to the direction the page now requires.
+      const turnEdge = turned && !moved && pageReadsFacing(page);
+      if (stepEdge || turnEdge) {
         s.touched[key] = true;
         s.main = startFiber(s, key, index, false, w.pagePrograms.get(key)![index]!);
       }
@@ -831,7 +1043,7 @@ function runFiber(
     const ins = top.prog[top.pc]!;
     switch (ins.op) {
       case "if":
-        top.pc = evalCondition(ins.cond, s.sw, f.key) ? top.pc + 1 : ins.onFalse;
+        top.pc = evalCondition(ins.cond, s.sw, f.key, input.facing) ? top.pc + 1 : ins.onFalse;
         break;
       case "jmp":
         top.pc = ins.to;
@@ -845,6 +1057,22 @@ function runFiber(
         runInstant(s, f, ins);
         top.pc++;
         break;
+      case "lockInput":
+        s.inputLocked = true;
+        top.pc++;
+        break;
+      case "unlockInput":
+        s.inputLocked = false;
+        top.pc++;
+        break;
+      case "place": {
+        const eventId = ins.target === "this" ? f.key.split("/").pop()! : ins.target.event;
+        const p = { x: ins.x, y: ins.y, dir: ins.dir };
+        s.placements[eventId] = p;
+        s.pendingPlacements.push({ eventId, ...p });
+        top.pc++;
+        break;
+      }
       case "erase":
         f.erase = true;
         finishFiber(s, f);
@@ -959,9 +1187,10 @@ export function stepInterp(w: World, s0: InterpState, input: InterpInput): Inter
   // off that step, performs the work, then calls continueExternal().
   s.pendingTransfer = null;
   s.pendingMoveRoutes = [];
+  s.pendingPlacements = [];
   s.abortedRoutes = [];
 
-  cancelStaleParallels(s, w);
+  cancelStaleParallels(s, w, input.facing);
   scanTriggers(s, w, input);
   const budget: StepBudget = { remaining: RUNAWAY_STEP_LIMIT };
 

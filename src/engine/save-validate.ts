@@ -19,7 +19,7 @@ import { MAX_FIBER_STACK_DEPTH } from "./interpreter.ts";
 const INTEGER_OPS = new Set([
   "text", "choices", "switch", "variable", "selfSwitch", "if", "jmp",
   "wait", "gold", "item", "se", "erase", "exit", "transfer",
-  "moveRoute", "common",
+  "moveRoute", "common", "lockInput", "unlockInput", "place",
 ]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -78,6 +78,11 @@ function validateCondition(v: unknown, path: string): string | null {
       return null;
     case "gold":
       if (!isFiniteNumber(v.amount)) return fail(`${path}.amount`, "number required");
+      return null;
+    case "facing":
+      if (!["down", "left", "right", "up"].includes(v.dir as string)) {
+        return fail(`${path}.dir`, "bad direction");
+      }
       return null;
     default:
       return fail(`${path}.kind`, "unknown condition kind");
@@ -228,6 +233,21 @@ function validateProg(prog: unknown, path: string): string | null {
       case "erase":
       case "exit":
         break;
+      case "lockInput":
+      case "unlockInput":
+        break;
+      case "place": {
+        if (ins.target !== "this" && !(isRecord(ins.target) && typeof ins.target.event === "string")) {
+          return fail(`${here}.target`, '"this" or {event: id} required');
+        }
+        if (!isNonNegInt(ins.x) || !isNonNegInt(ins.y)) {
+          return fail(`${here}`, "x/y non-negative integers required");
+        }
+        if (ins.dir !== null && !["down", "left", "right", "up"].includes(ins.dir as string)) {
+          return fail(`${here}.dir`, "bad direction");
+        }
+        break;
+      }
       case "transfer": {
         const e = needStr("map");
         if (e) return e;
@@ -371,6 +391,20 @@ function validateLatchRecord(v: unknown, path: string): string | null {
   return null;
 }
 
+/** Durable `place` overrides: event id -> {x, y, dir|null}. */
+function validatePlacements(v: unknown, path: string): string | null {
+  if (!isRecord(v)) return fail(path, "record required");
+  for (const [id, p] of Object.entries(v)) {
+    const at = `${path}.${id}`;
+    if (!isRecord(p)) return fail(at, "placement must be an object");
+    if (!isNonNegInt(p.x) || !isNonNegInt(p.y)) return fail(`${at}`, "x/y non-negative integers required");
+    if (p.dir !== null && !["down", "left", "right", "up"].includes(p.dir as string)) {
+      return fail(`${at}.dir`, "bad direction or null");
+    }
+  }
+  return null;
+}
+
 function validateModal(v: unknown, path: string, liveKeys: ReadonlySet<string>): string | null {
   if (v === null) return null;
   if (!isRecord(v)) return fail(path, "modal must be an object or null");
@@ -475,6 +509,11 @@ export function validateSnapshot(snap: unknown): string | null {
   if (er) return er;
   const tt = validateLatchRecord(it.touched, "state.interp.touched");
   if (tt) return tt;
+  if (typeof it.inputLocked !== "boolean") {
+    return "state.interp.inputLocked: boolean required";
+  }
+  const pl = validatePlacements(it.placements, "state.interp.placements");
+  if (pl) return pl;
   if (!Array.isArray(it.cues)) return "state.interp.cues: array required";
   if (it.cues.length !== 0) return "state.interp.cues: cues must drain before save";
   if (it.pendingTransfer !== null) {
@@ -482,6 +521,9 @@ export function validateSnapshot(snap: unknown): string | null {
   }
   if (!Array.isArray(it.pendingMoveRoutes) || it.pendingMoveRoutes.length !== 0) {
     return "state.interp.pendingMoveRoutes: no parked move routes at a save point";
+  }
+  if (!Array.isArray(it.pendingPlacements) || it.pendingPlacements.length !== 0) {
+    return "state.interp.pendingPlacements: no pending event placements at a save point";
   }
   if (!Array.isArray(it.abortedRoutes) || it.abortedRoutes.length !== 0) {
     return "state.interp.abortedRoutes: route aborts must drain before save";

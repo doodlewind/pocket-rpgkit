@@ -44,5 +44,40 @@ repository's own examples:
   (`^[A-Za-z0-9_-]+$`, `^[A-Za-z0-9_.-]+$`). Every document valid under
   v1.0 stays valid.
 
+## v1 amendment — 2026-09-29 (K1 event-model extension)
+
+Six optional, backwards-compatible event-model additions (T2-1, T2-2,
+T2-3, T2-6, T2-7, T2-8). Every v1.0/v1.1 document stays valid; all new
+fields and commands are optional and the v1 spellings keep their meaning.
+
+- **Event areas (T2-1):** an event may occupy a rectangle with optional
+  `w` / `h` (default 1×1; minimum 1). A `playerTouch` page fires when the
+  player enters ANY cell of the rectangle (each step onto a fresh area
+  cell is a new entry), and an `action` page fires when the player
+  confirms while the faced tile OR the occupied tile lies inside it.
+- **Compound page conditions (T2-2):** a page condition may carry
+  `all: Condition[]`, an AND of existing switch (either value), variable,
+  self-switch, item and gold conditions. It ANDs with the flat
+  `switch` / `selfSwitch` / `variable` / `item` fields when both are used.
+- **Facing conditions (T2-3):** a new `{ kind: "facing", dir }` condition
+  (usable in `if` and in `condition.all`) tests the live player facing. A
+  `playerTouch` page whose condition reads facing also re-fires when the
+  player turns in place while standing inside its area — modelling a
+  door/exit mat that only opens when faced, not when crossed sideways.
+- **Per-visit `local.` variables (T2-6):** any switch or variable whose id
+  starts with `local.` is reset on every map entry (it does not survive a
+  transfer). Non-`local.` ids remain project-wide.
+- **Place event and initial facing (T2-7):** a `place` command
+  (`{ op: "place", target, x, y, dir? }`, target `"this"` or
+  `{ event: id }`) relocates an event to a tile, optionally facing a
+  direction (MV Set Event Location). A page may also set `dir` for the
+  facing its character shows when that page spawns it (and after a page
+  switch).
+- **Cross-event input lock (T2-8):** `{ op: "lockInput" }` and
+  `{ op: "unlockInput" }`. While the lock is held the mover ignores the
+  d-pad and action presses start no event; `autorun` / `parallel` pages
+  keep running. The lock is per map visit (a transfer clears it) and its
+  held state is preserved by a save.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

@@ -318,7 +318,7 @@ export function GameView(props: {
     for (const ev of currentMap.events ?? []) {
       const idx = slotAt(state.mapId, ev.id);
       if (idx === undefined) continue;
-      const active = activePage(ev, state.sw, state.mapId);
+      const active = activePage(ev, state.sw, state.mapId, state.move.facing);
       const name = active?.page.sprite;
       const want = name ? assets.npcSrc[name] ?? "" : "";
       const key = `${state.mapId}/${ev.id}`;

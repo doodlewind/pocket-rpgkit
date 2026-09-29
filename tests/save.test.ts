@@ -146,6 +146,12 @@ describe("P1⑤ save — safe-point gate", () => {
     expect(canSave(player, interp)).toBe(false);
   });
 
+  test("a pending placement is not a save point", () => {
+    const interp = createInterpState();
+    interp.pendingPlacements.push({ eventId: "npc", x: 3, y: 4, dir: null });
+    expect(canSave(restPlayer(), interp)).toBe(false);
+  });
+
   test("a fatal interpreter error is not a save point (review 1274 B1)", () => {
     const interp = createInterpState();
     expect(canSave(restPlayer(), interp)).toBe(true);
@@ -263,6 +269,40 @@ describe("P1⑤ save — envelope round trip", () => {
     expect(thrownCode(() => decodeEnvelopeText(JSON.stringify({ ...env, format: "rpgkit-save/v0" })))).toBe("format");
     const noState = { format: SAVE_FORMAT, version: SAVE_VERSION, checksum: "00000000" };
     expect(thrownCode(() => decodeEnvelopeText(JSON.stringify(noState)))).toBe("shape");
+  });
+
+  // Per-visit interpreter fields serialize too.
+  test("placements and a held cross-event input lock round-trip", () => {
+    const interp = createInterpState();
+    interp.inputLocked = true;
+    interp.placements.npc = { x: 4, y: 6, dir: "left" };
+    interp.placements.other = { x: 0, y: 0, dir: null };
+    const snap = createSnapshot("meadow", restPlayer(), interp, 0);
+    const back = decodeEnvelopeText(encodeEnvelope(snap));
+    expect(back).toEqual(snap);
+    expect(back.interp.placements.npc).toEqual({ x: 4, y: 6, dir: "left" });
+    expect(back.interp.placements.other).toEqual({ x: 0, y: 0, dir: null });
+    expect(back.interp.inputLocked).toBe(true);
+    expect(canSave(restPlayer(), interp)).toBe(true);
+  });
+
+  test("loads a checksum-valid v1 save written before per-visit fields existed", () => {
+    const current = JSON.parse(
+      encodeEnvelope(createSnapshot("meadow", restPlayer(), createInterpState(), 0)),
+    ) as Record<string, unknown> & { state: SaveSnapshot; checksum: string };
+    const legacyInterp = current.state.interp as Omit<
+      InterpState,
+      "inputLocked" | "placements" | "pendingPlacements"
+    > & Partial<Pick<InterpState, "inputLocked" | "placements" | "pendingPlacements">>;
+    delete legacyInterp.inputLocked;
+    delete legacyInterp.placements;
+    delete legacyInterp.pendingPlacements;
+    current.checksum = fnv1aText(canonicalJson(current.state));
+
+    const restored = decodeEnvelopeText(JSON.stringify(current));
+    expect(restored.interp.inputLocked).toBe(false);
+    expect(restored.interp.placements).toEqual({});
+    expect(restored.interp.pendingPlacements).toEqual([]);
   });
 });
 
@@ -425,6 +465,37 @@ describe("P1⑤ save — deep structural validation (F4/1173)", () => {
     s.interp.pendingTransfer = { fiber: "x", map: "m", x: 0, y: 0, dir: "keep", fadeFrames: 0 };
   });
   rejects("a bad held mask", (s) => { s.held = 1.5; });
+
+  // --- per-visit state and compiled event-model ops ---------------------
+  rejects("a non-boolean input lock", (s) => { s.interp.inputLocked = 1; });
+  rejects("a placement with a bad dir", (s) => {
+    s.interp.placements["meadow/x"] = { x: 1, y: 2, dir: "sideways" };
+  });
+  rejects("a placement with a negative tile", (s) => {
+    s.interp.placements["meadow/x"] = { x: -1, y: 2, dir: null };
+  });
+  rejects("a non-empty pending placement queue", (s) => {
+    s.interp.pendingPlacements.push({ eventId: "x", x: 1, y: 2, dir: null });
+  });
+  rejects("a malformed pending placement queue", (s) => {
+    s.interp.pendingPlacements = null;
+  });
+  rejects("a facing condition with a bad dir", (s) => {
+    parkParallel(s, {
+      stack: [{
+        prog: [
+          { op: "if", cond: { kind: "facing", dir: "sideways" }, onFalse: 2 },
+          { op: "exit" },
+        ], pc: 0,
+      }], mode: "run",
+    });
+  });
+  rejects("a place instruction with a bad target", (s) => {
+    parkParallel(s, {
+      stack: [{ prog: [{ op: "place", target: 7, x: 0, y: 0, dir: null }, { op: "exit" }], pc: 0 }],
+      mode: "run",
+    });
+  });
 
   // --- R1202-1: checksum-valid fibers that crash the NEXT frame ----------
   // Helper: park a parallel fiber for a live map event with an arbitrary

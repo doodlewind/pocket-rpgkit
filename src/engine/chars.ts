@@ -35,10 +35,19 @@ import { keyedRecord } from "./clone.ts";
 import { stepPixels, stepFrames, type MovementConfig } from "./movement.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
 import { canStepFrom } from "./passability.ts";
-import type { GameEvent, MapDef, MoveRoute, MoveStep } from "./types.ts";
+import type { Dir, Facing, GameEvent, MapDef, MoveRoute, MoveStep } from "./types.ts";
 
 const DX = [0, -1, 0, 1] as const; // down, left, up, right
 const DY = [1, 0, -1, 0] as const;
+
+const DIR4: Record<Dir, Dir4> = { down: 0, left: 1, up: 2, right: 3 };
+
+/** Durable position overrides the interpreter carries across a map visit. */
+export interface Placement {
+  x: number;
+  y: number;
+  dir: Dir | null;
+}
 
 /** MOTION_HZ reference ticks between autonomous random/approach decisions. */
 const THINK_BEATS = 8;
@@ -130,6 +139,8 @@ export function syncPages(
   sw: SwitchState,
   cfg: MovementConfig,
   erased: ReadonlySet<string>,
+  placements: Readonly<Record<string, Placement>> = keyedRecord(),
+  facing?: Facing,
 ): { state: CharsState; result: SyncResult } {
   const s = cloneChars(s0);
   const abortedWaiters: string[] = [];
@@ -138,22 +149,29 @@ export function syncPages(
   for (const ev of map.events ?? []) {
     const key = eventKey(map.id, ev.id);
     if (erased.has(key)) continue;
-    const active = activePage(ev, sw, map.id);
+    const active = activePage(ev, sw, map.id, facing);
     if (!active) continue;
     live.add(ev.id);
+
+    // A `place` command relocates the spawn origin; MV Set Event
+    // Location moves a not-yet-loaded event's future start too.
+    const placed = placements[ev.id];
+    const ox = placed ? placed.x : ev.x;
+    const oy = placed ? placed.y : ev.y;
+    const initialFacing: Dir4 = placed?.dir ? DIR4[placed.dir] : (active.page.dir ? DIR4[active.page.dir] : 0);
 
     const existing = s.chars[ev.id];
     if (!existing) {
       s.chars[ev.id] = {
         id: ev.id,
-        tx: ev.x,
-        ty: ev.y,
-        px: ev.x * cfg.tile,
-        py: ev.y * cfg.tile,
-        facing: 0,
+        tx: ox,
+        ty: oy,
+        px: ox * cfg.tile,
+        py: oy * cfg.tile,
+        facing: initialFacing,
         phase: 0,
         moving: false,
-        stepDir: 0,
+        stepDir: initialFacing,
         pageIndex: active.index,
         visible: active.page.sprite != null,
         blocks: active.page.blocks === true,
@@ -178,6 +196,12 @@ export function syncPages(
       existing.px = existing.tx * cfg.tile;
       existing.py = existing.ty * cfg.tile;
       existing.thinkIn = 0;
+      // MV resets the event's facing to the new page's authored direction
+      // on page setup (page.dir).
+      if (active.page.dir) {
+        existing.facing = DIR4[active.page.dir];
+        existing.stepDir = existing.facing;
+      }
     }
   }
 
@@ -202,6 +226,39 @@ function makePatrol(route: MoveRoute | undefined): RouteRun | null {
     waiter: null,
     waitLeft: 0,
   };
+}
+
+/** Relocate an event's character to a tile (MV Set Event
+ *  Location), aborting any in-flight step. A character not yet created is a
+ *  no-op here: syncPages spawns it from the durable placement record on the
+ *  next reconciliation. A forced route in progress is displaced and its
+ *  waiter returned so the parking fiber cannot deadlock. */
+export function placeChar(
+  s0: CharsState,
+  eventId: string,
+  x: number,
+  y: number,
+  dir: Dir | null,
+  cfg: MovementConfig,
+): { state: CharsState; displacedWaiter: string | null } {
+  const s = cloneChars(s0);
+  const ch = s.chars[eventId];
+  const displacedWaiter = ch?.route && !ch.route.patrol && ch.route.waiter ? ch.route.waiter : null;
+  if (ch) {
+    ch.tx = x;
+    ch.ty = y;
+    ch.px = x * cfg.tile;
+    ch.py = y * cfg.tile;
+    ch.phase = 0;
+    ch.moving = false;
+    if (dir) {
+      ch.facing = DIR4[dir];
+      ch.stepDir = ch.facing;
+    }
+    ch.thinkIn = 0;
+    ch.route = ch.patrol ? { ...ch.patrol, pc: 0, waitLeft: 0 } : null;
+  }
+  return { state: s, displacedWaiter };
 }
 
 /** Install a forced route published by a moveRoute command. A previous

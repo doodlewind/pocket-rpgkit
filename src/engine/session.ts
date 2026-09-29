@@ -52,6 +52,7 @@ import {
   cloneChars,
   createChars,
   installRoute,
+  placeChar,
   stepChars,
   syncPages,
   type CharsState,
@@ -159,6 +160,7 @@ export function startSession(
   const start = project.start;
   if (sw0) {
     const interp = createInterpState(sw0);
+    clearLocalBank(interp.sw);
     return {
       frame: 0,
       mapId: start.map,
@@ -186,9 +188,23 @@ export function startSession(
   };
 }
 
+/** Drop per-visit switch/variable ids. Any switch or variable
+ *  whose id starts with `local.` lives for one map visit: it is cleared on
+ *  every map entry, so a guard like `local.npc.guard == 0` re-runs after a
+ *  transfer away and back. Mutates the shared project-wide bank in place
+ *  (the map interpreter rebuild shares this object). */
+function clearLocalBank(sw: SwitchState): void {
+  for (const id of Object.keys(sw.switches)) {
+    if (id.startsWith("local.")) delete sw.switches[id];
+  }
+  for (const id of Object.keys(sw.variables)) {
+    if (id.startsWith("local.")) delete sw.variables[id];
+  }
+}
+
 /** Spawn per-entry state for a map: fresh interpreter (MV rebuilds the map
  *  interpreter on load) and characters at their authored cells, with the
- *  project-wide switch bank shared. */
+ *  project-wide switch bank shared (minus the per-visit `local.` ids). */
 function enterMap(
   s: SessionState,
   mapId: string,
@@ -197,6 +213,7 @@ function enterMap(
   facing: Facing,
   cfg: MovementConfig,
 ): void {
+  clearLocalBank(s.sw);
   s.mapId = mapId;
   s.move = initialMovement(x, y, facing, cfg);
   s.chars = createChars();
@@ -225,10 +242,10 @@ export function tableWithBodies(base: PassageTable, chars: CharsState): PassageT
   return stampBlockedCells(base, cells);
 }
 
-function motionOf(map: MapDef, sw: SwitchState): Record<string, MotionType> {
+function motionOf(map: MapDef, sw: SwitchState, facing: Facing): Record<string, MotionType> {
   const out = keyedRecord<MotionType>();
   for (const ev of map.events ?? []) {
-    const active = activePage(ev, sw, map.id);
+    const active = activePage(ev, sw, map.id, facing);
     if (active) out[ev.id] = active.page.moveType ?? "static";
   }
   return out;
@@ -322,19 +339,29 @@ function stepReferenceTick(
   //    aborts any forced route parked on it; resume the waiter so the
   //    external fiber cannot deadlock.
   const erased = new Set(Object.keys(s.interp.erased));
-  const synced = syncPages(s.chars, map, s.sw, sess.cfg, erased);
+  const synced = syncPages(
+    s.chars,
+    map,
+    s.sw,
+    sess.cfg,
+    erased,
+    s.interp.placements,
+    s.move.facing,
+  );
   s.chars = synced.state;
   for (const waiter of synced.result.abortedWaiters) {
     s.interp = continueExternal(s.interp, waiter);
   }
 
   // 2. Mover — frozen while a blocking fiber runs, the player's own forced
-  //    route is driving, or a choices box (including one owned by a PARALLEL
-  //    page) is open capturing the d-pad. A parallel TEXT line does not
-  //    freeze the world (review C10).
+  //    route is driving, a choices box (including one owned by a PARALLEL
+  //    page) is open capturing the d-pad, or the cross-event input lock is
+  //    held. A parallel TEXT line does not freeze the world
+  //    (review C10).
+  const prevFacing = s.move.facing;
   const busy = isBusy(s.interp);
   const choicesOpen = s.interp.modal?.kind === "choices";
-  if (!busy && !choicesOpen && s.playerRoute === null) {
+  if (!busy && !choicesOpen && s.playerRoute === null && !s.interp.inputLocked) {
     const table = tableWithBodies(sess.tables.get(s.mapId)!, s.chars);
     Object.assign(s.move, stepMovement(s.move, input.buttons, table, sess.cfg));
   }
@@ -354,7 +381,7 @@ function stepReferenceTick(
     playerPlace,
     sess.cfg,
     locked,
-    motionOf(map, s.sw),
+    motionOf(map, s.sw, s.move.facing),
   );
   s.chars = stepped.state;
   for (const waiter of stepped.finishedWaiters) {
@@ -364,9 +391,14 @@ function stepReferenceTick(
   // Player forced route (moveRoute target:"player").
   if (s.playerRoute) stepPlayerRoute(s, sess);
 
-  // 4. Interpreter — live NPC cells feed the trigger scan.
+  // 4. Interpreter — only displaced NPC cells need to supplement the
+  // world's authored spatial index. Static characters resolve from the
+  // indexed event origin without growing the per-frame record.
   const eventCells = keyedRecord<{ x: number; y: number }>();
-  for (const ev of map.events ?? []) eventCells[ev.id] = charCell(s.chars, ev);
+  for (const ev of map.events ?? []) {
+    const cell = charCell(s.chars, ev);
+    if (cell.x !== ev.x || cell.y !== ev.y) eventCells[ev.id] = cell;
+  }
   const interpInput: InterpInput = {
     confirmEdge: input.confirmEdge,
     cancelEdge: input.cancelEdge,
@@ -375,6 +407,7 @@ function stepReferenceTick(
     playerCell: { x: s.move.tx, y: s.move.ty },
     prevCell: prevCellIn,
     facing: s.move.facing,
+    prevFacing,
     eventCells,
   };
   s.interp = stepInterp(sess.worlds.get(s.mapId)!, s.interp, interpInput);
@@ -425,6 +458,16 @@ function stepReferenceTick(
       if (installed.displacedWaiter) {
         s.interp = continueExternal(s.interp, installed.displacedWaiter);
       }
+    }
+  }
+  // 5b. `place` requests: relocate the live character now; the
+  //     durable placement record the interpreter already holds makes a
+  //     later-created character spawn at the new tile on the next sync.
+  for (const p of s.interp.pendingPlacements) {
+    const placed = placeChar(s.chars, p.eventId, p.x, p.y, p.dir, sess.cfg);
+    s.chars = placed.state;
+    if (placed.displacedWaiter) {
+      s.interp = continueExternal(s.interp, placed.displacedWaiter);
     }
   }
   if (s.interp.pendingTransfer) {

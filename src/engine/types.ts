@@ -46,13 +46,19 @@ export interface MoveRoute {
   skippable: boolean;
 }
 
-/** A condition inside an `if` command (compare against live switch state). */
+/** A condition inside an `if` command (compare against live switch state).
+ *  The same union backs PageCondition.all: a switch clause
+ *  there may demand either value, unlike the bare page-condition `switch`
+ *  field which only asks for ON. `facing` reads the live player facing and
+ *  is meaningful only where a facing context exists (the trigger scan, an
+ *  `if` folded on the map); elsewhere it evaluates false. */
 export type Condition =
   | { kind: "switch"; id: string; value?: boolean }
   | { kind: "variable"; id: string; op: ">=" | "<=" | "==" | "!="; value: number }
   | { kind: "selfSwitch"; key: "A" | "B" | "C" | "D"; value?: boolean }
   | { kind: "item"; id: string; count: number }
-  | { kind: "gold"; amount: number };
+  | { kind: "gold"; amount: number }
+  | { kind: "facing"; dir: Dir };
 
 export interface VariableSet {
   op: "set" | "add" | "sub";
@@ -84,14 +90,30 @@ export type Command =
   | { op: "se"; name: string; volume?: number; pitch?: number }
   | { op: "erase" }
   | { op: "exit" }
-  | { op: "common"; id: string };
+  | { op: "common"; id: string }
+  /** Cross-event input lock. While the lock is held the mover
+   *  ignores the d-pad and action presses cannot start an event; autorun
+   *  and parallel fibers keep folding. MV lock_controls/unlock_controls. */
+  | { op: "lockInput" }
+  | { op: "unlockInput" }
+  /** Relocate an event to a tile (MV Set Event Location),
+   *  optionally facing a direction there. "this" moves the running event;
+   *  { event } moves another map event. Applied on the next character
+   *  sync, so a page with blocks:true occupies the new cell. */
+  | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir?: Dir };
 
-/** A page's activation gate. Every present clause must hold (AND). */
+/** A page's activation gate. Every present clause must hold (AND). The
+ *  four flat fields stay the v1 spelling; `all` is the compound
+ *  spelling: every Condition in the list must hold, and it ANDs with the
+ *  flat fields when both are authored. An `all` entry of kind "facing"
+ *  additionally makes a playerTouch page re-fire when the
+ *  player turns while standing in its area. */
 export interface PageCondition {
   switch?: string;
   selfSwitch?: "A" | "B" | "C" | "D";
   variable?: { id: string; op: ">=" | "<=" | "==" | "!="; value: number };
   item?: string;
+  all?: Condition[];
 }
 
 export interface Page {
@@ -104,6 +126,10 @@ export interface Page {
    *  player on a timer. An explicit moveRoute overrides all three. */
   moveType?: "static" | "random" | "approach";
   moveRoute?: MoveRoute;
+  /** Facing the character shows when the page spawns it (the
+   *  first page that creates the CharState, and again after a page
+   *  switch). Defaults to down. */
+  dir?: Dir;
   commands: Command[];
 }
 
@@ -112,6 +138,12 @@ export interface GameEvent {
   name?: string;
   x: number;
   y: number;
+  /** The event occupies the w×h rectangle with (x,y) as its
+   *  top-left corner. playerTouch fires when the player enters ANY cell of
+   *  the rectangle; action fires when the player confirms facing any cell
+   *  of it (or stands in it). Defaults to 1×1; the schema requires >= 1. */
+  w?: number;
+  h?: number;
   pages: Page[];
 }
 

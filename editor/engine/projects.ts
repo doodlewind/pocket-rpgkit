@@ -222,6 +222,8 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
         "name": { "type": "string" },
         "x": { "type": "integer", "minimum": 0 },
         "y": { "type": "integer", "minimum": 0 },
+        "w": { "type": "integer", "minimum": 1, "description": "Area width in tiles; default 1. The event occupies the w×h rectangle from (x,y): playerTouch fires on entry into ANY cell, action fires when the faced or occupied cell is inside." },
+        "h": { "type": "integer", "minimum": 1, "description": "Area height in tiles; default 1." },
         "pages": {
           "type": "array",
           "minItems": 1,
@@ -239,6 +241,7 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
         "sprite": { "type": ["string", "null"], "description": "Key in project.sprites; null = no character (touch trigger tile only)." },
         "blocks": { "type": "boolean", "description": "true = the event body blocks movement (closed gates); default false = below-characters, walkable, touch fires on entry (MV priorityType 0 semantics)." },
         "moveType": { "enum": ["static", "random", "approach"] },
+        "dir": { "enum": ["down", "left", "right", "up"], "description": "Initial facing the character shows when this page spawns it; default down." },
         "moveRoute": {
           "type": "object",
           "additionalProperties": false,
@@ -272,7 +275,13 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
             "value": { "type": "integer" }
           }
         },
-        "item": { "type": "string" }
+        "item": { "type": "string" },
+        "all": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/condition" },
+          "description": "Compound AND gate: every condition in the list must hold, and it ANDs with the flat fields above. A {kind:'facing', dir} clause tests the player facing and makes a playerTouch page re-fire on a turn in place."
+        }
       }
     },
 
@@ -444,6 +453,46 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["op"],
+          "properties": {
+            "op": { "const": "lockInput" }
+          },
+          "description": "Cross-event input lock: while held the player cannot move and action presses start no event; autorun/parallel pages keep running. Cleared by unlockInput (or a map transfer)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op"],
+          "properties": {
+            "op": { "const": "unlockInput" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "target", "x", "y"],
+          "properties": {
+            "op": { "const": "place" },
+            "target": {
+              "oneOf": [
+                { "enum": ["this"] },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["event"],
+                  "properties": { "event": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" } }
+                }
+              ]
+            },
+            "x": { "type": "integer", "minimum": 0 },
+            "y": { "type": "integer", "minimum": 0 },
+            "dir": { "enum": ["down", "left", "right", "up"] }
+          },
+          "description": "Set Event Location: move this (or named) event to a tile, optionally facing a direction."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["op", "id"],
           "properties": {
             "op": { "const": "common" },
@@ -511,6 +560,15 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
           "properties": {
             "kind": { "const": "gold" },
             "amount": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "dir"],
+          "properties": {
+            "kind": { "const": "facing" },
+            "dir": { "enum": ["down", "left", "right", "up"], "description": "The player facing. In a page condition it gates action/playerTouch pages by direction; in a playerTouch page it also re-fires when the player turns while standing in the area." }
           }
         }
       ]

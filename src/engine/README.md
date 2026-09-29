@@ -16,8 +16,9 @@ state.
   reference ticks one host frame folds.
 - `passability.ts`, `movement.ts` — tile collision (dual-edge `dirBlock`
   masks, blocking bodies) and the grid mover.
-- `interpreter.ts` — event pages, triggers, the 15-command interpreter,
-  the typewriter clock, the seeded RNG, saveable switch state.
+- `interpreter.ts` — event pages, triggers, the 18-command interpreter
+  (the v1 15 plus `lockInput` / `unlockInput` / `place`), the typewriter
+  clock, the seeded RNG, saveable switch state.
 - `chars.ts` — per-map character motion: page patrol routes, autonomous
   random/approach, command-forced routes, mutual exclusion.
 - `session.ts` — the multi-map fold: transfer (map swap + fade) and
@@ -76,9 +77,31 @@ Conventions:
 - `facing` is the `Facing` index both the camera and mover emit:
   0 down, 1 left, 2 up, 3 right. Action-button events trigger on the event
   one tile **in front** of `playerCell` on that facing.
-- `playerTouch` events trigger on the frame the player's cell **enters**
-  the event cell (`playerCell !== prevCell`); standing still never fires,
-  and the event does not refire until the player leaves and re-enters.
+- **Event areas:** an event with `w`/`h` occupies a rectangle from
+  `(x,y)` (default 1×1). `playerTouch` fires on the frame the player's
+  cell **enters** any cell of that rectangle — stepping from one area cell
+  to another re-fires; standing still never does, and leaving clears the
+  latch. `action` fires when the faced tile or the player's own tile is
+  inside the rectangle.
+- **Compound and facing conditions:** a page condition's
+  `all: Condition[]` is an AND of the same conditions `if` accepts
+  (including a switch demanded OFF and a `{kind:"facing", dir}` test); it
+  ANDs with the flat condition fields. A `playerTouch` page whose `all`
+  reads facing also fires on a **turn in place** (`prevFacing !== facing`)
+  while the player stands in its area, so an exit mat gated on "facing
+  up" does not open when crossed sideways. Character synchronization,
+  parallel-fiber cancellation, trigger arbitration, and the UI all select
+  pages against the same live facing.
+- **Per-visit locals:** a switch or variable id prefixed `local.`
+  is reset on every map entry; it never survives a transfer.
+- **Place and initial facing:** the `place` command relocates
+  `"this"` or `{event}` to a tile (and optional facing); a page `dir` sets
+  the facing the character shows when that page spawns it or on a page
+  switch.
+- **Input lock:** `lockInput`/`unlockInput` are a cross-event lock:
+  while held the mover ignores the d-pad and confirm starts no action
+  event, but `autorun`/`parallel` fibers still fold. The lock is per map
+  visit and its held state round-trips through a save.
 - `isBusy(state)` is true while a blocking (action / playerTouch / autorun)
   fiber runs. The mover freezes for its whole duration. PARALLEL pages run
   concurrently and never set busy.
