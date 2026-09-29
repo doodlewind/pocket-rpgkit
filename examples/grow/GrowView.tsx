@@ -16,7 +16,7 @@ import { touches, BTN } from "@pocketjs/framework/input";
 import { followCamera } from "../../src/engine/camera.ts";
 import { deepClone } from "../../src/engine/clone.ts";
 import {
-  biomeAt, biomeBoundaryX, biomeTransitionKind, cameraXForState, createGrow, DEFAULT_PARAMS, naturalStampAt, wildernessTileAt,
+  biomeAt, biomeBoundaryX, biomeTransitionKind, cameraXForState, createGrow, DEFAULT_PARAMS, naturalStampAt, warmWilderness, wildernessTileAt,
   growStateHash, liveFrameAtTick, rememberGrowGridHash,
   type GrowParams, type GrowState,
 } from "./grow.ts";
@@ -39,7 +39,12 @@ const AUTHORED_WORLD_H = DEFAULT_PARAMS.height * TILE;
 const OVERSCAN = 1;
 const NEXT_SEED = 0x9e37_79b9;
 const DEFAULT_TOTAL_TICKS = 156;
-const PREFILL_TICKS_PER_FRAME = 2;
+// Timeline recording, then the wilderness warm-up, run ahead of the live
+// growth one bounded slice per frame, so a scrub soon after launch or SQUARE
+// finds both ready: the default timeline in 20 frames, its wilderness in
+// about 20 more.
+const PREFILL_TICKS_PER_FRAME = 8;
+const WARM_COLUMNS_PER_FRAME = 8;
 const TERRAIN_BLOCK_TILES = 16;
 const CELL_CLASS = "absolute w-[16] h-[16]";
 
@@ -450,6 +455,8 @@ export function GrowView() {
   let growHash = timeline.hash(grow);
   let seekCount = 0;
   let scrubActive = false;
+  // Columns below this have settled wilderness caches for the current seed.
+  let warmedTo = 0;
   let groundMounted = 0;
   let upperMounted = 0;
   const [g, setG] = createSignal(grow, { equals: (a, b) =>
@@ -594,7 +601,7 @@ export function GrowView() {
     return next;
   };
   const changeSeed = () => {
-    grow = createGrow({ ...params, seed: (params.seed + NEXT_SEED) >>> 0 }); params = grow.params; timeline = new GrowTimeline(params, grow); total = DEFAULT_TOTAL_TICKS; growHash = timeline.hash(grow); auto = true; scrubActive = false; seekCount = 0; itemCache.clear();
+    grow = createGrow({ ...params, seed: (params.seed + NEXT_SEED) >>> 0 }); params = grow.params; timeline = new GrowTimeline(params, grow); total = DEFAULT_TOTAL_TICKS; growHash = timeline.hash(grow); auto = true; scrubActive = false; seekCount = 0; warmedTo = 0; itemCache.clear();
     batch(() => { setG(grow); setAutoSig(true); setSeedSig(params.seed); setPlayDone(grow); setPlayProject(undefined); setPlayCamX(0); setPlayCamY(0); }); refreshMounted(); publish();
   };
   const enterPlay = () => {
@@ -629,6 +636,10 @@ export function GrowView() {
     if (!timeline.complete) {
       timeline.prefillTo(Math.min(total, timeline.furthestTick + PREFILL_TICKS_PER_FRAME));
       if (timeline.complete) total = timeline.furthestTick;
+    } else if (warmedTo <= timeline.frontierX + Math.ceil(viewport().w / TILE) + OVERSCAN + 1) {
+      // The camera never shows more than a viewport past the final frontier.
+      warmWilderness(params, warmedTo, warmedTo + WARM_COLUMNS_PER_FRAME - 1);
+      warmedTo += WARM_COLUMNS_PER_FRAME;
     }
     const pointerTick = pollPointer(); if (pointerTick !== undefined) seekTo(pointerTick);
     const pressed = buttons & ~prevButtons;

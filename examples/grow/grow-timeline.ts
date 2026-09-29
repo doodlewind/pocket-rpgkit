@@ -69,6 +69,8 @@ export class GrowTimeline {
   get seed(): number { return this.params.seed; }
   get furthestTick(): number { return this.#builder.tick; }
   get complete(): boolean { return this.#builder.phase === "done"; }
+  /** Rightmost developed column recorded so far. */
+  get frontierX(): number { return Math.max(this.#builder.frontierX, this.#builder.roadFrontierX); }
 
   #append(): void {
     const next = canonical(stepGrowTickOwned(this.#builder));

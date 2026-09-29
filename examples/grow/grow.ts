@@ -290,16 +290,34 @@ export function naturalTileAt(p: GrowParams, x: number, y: number): number {
   const cache = paramCache(p);
   const cached = cache.natural[index]!;
   if (cached !== CACHE_EMPTY) return cached;
-  let result = 0;
+  // Each cell belongs to exactly one 2x2 block, and that block's stamp
+  // decides all four of its cells: settle them together. A timeline jump
+  // into unvisited country asks for every cell of the window at once.
   const by = Math.floor((y - 1) / 2);
-  const placed = blockStamp(p, Math.floor((x - (by & 1)) / 2), by);
-  if (placed) {
-    const st = STAMPS[placed.key]!;
-    const dx = x - placed.x, dy = y - placed.y;
-    if (dx >= 0 && dy >= 0 && dx < st.w && dy < st.h) result = stampCell(placed.key, dx, dy);
+  const bx = Math.floor((x - (by & 1)) / 2);
+  const placed = blockStamp(p, bx, by);
+  const { x0, y0 } = blockOrigin(bx, by);
+  for (let cy = y0; cy <= y0 + 1; cy++) for (let cx = x0; cx <= x0 + 1; cx++) {
+    if (cx < 1 || cx >= p.width - 1 || cy < 1 || cy >= p.height - 1) continue;
+    let result = 0;
+    if (placed) {
+      const st = STAMPS[placed.key]!;
+      const dx = cx - placed.x, dy = cy - placed.y;
+      if (dx >= 0 && dy >= 0 && dx < st.w && dy < st.h) result = stampCell(placed.key, dx, dy);
+    }
+    cache.natural[cy * p.width + cx] = result;
   }
-  cache.natural[index] = result;
-  return result;
+  return cache.natural[index]!;
+}
+
+/** Settle the natural-stamp and biome caches of columns x0..x1 ahead of
+ *  time, so a timeline jump into country the camera has not visited yet
+ *  does not compute them all in one frame. */
+export function warmWilderness(p: GrowParams, x0: number, x1: number): void {
+  const last = Math.min(p.width - 1, x1);
+  for (let x = Math.max(0, x0); x <= last; x++) {
+    for (let y = 0; y < p.height; y++) { naturalTileAt(p, x, y); biomeBandAt(p, x, y); }
+  }
 }
 
 /** Top-left cell and size of the natural stamp covering (x, y), if any. */
@@ -768,9 +786,19 @@ function sparseGrid(grid: Int32Array): SparseGrid {
   return sparse;
 }
 
+// Composed maps of empty runs shorter than one backing row, filled on first
+// use. Runs between occupied cells are mostly this short, and the timeline
+// hashes both layers on every recorded tick.
+const RUN_CACHE = 4096;
+const runA = new Uint32Array(RUN_CACHE);
+const runB = new Uint32Array(RUN_CACHE);
+const runKnown = new Uint8Array(RUN_CACHE);
+
 /** Apply N FNV mixes of -1. This step is affine modulo 2^32:
  *  (hash xor -1) * prime == (-prime) * hash - prime. */
 function mixEmptyRun(hash: number, count: number): number {
+  if (count === 0) return hash;
+  if (count < RUN_CACHE && runKnown[count]) return (Math.imul(runA[count]!, hash) + runB[count]!) >>> 0;
   let resultA = 1, resultB = 0;
   let baseA = (-FNV_PRIME) >>> 0, baseB = (-FNV_PRIME) >>> 0;
   for (let n = count; n > 0; n = Math.floor(n / 2)) {
@@ -781,6 +809,7 @@ function mixEmptyRun(hash: number, count: number): number {
     baseB = (Math.imul(baseA, baseB) + baseB) >>> 0;
     baseA = Math.imul(baseA, baseA) >>> 0;
   }
+  if (count < RUN_CACHE) { runA[count] = resultA; runB[count] = resultB; runKnown[count] = 1; }
   return (Math.imul(resultA, hash) + resultB) >>> 0;
 }
 

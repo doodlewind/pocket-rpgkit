@@ -101,7 +101,7 @@ bun install
 bun test                 # reducer/format/controller suites; sim cases skip
 bun run build:wasm       # one-time: compile the vendored sim core
 bun run build:example    # build meadow, sunstone, grow, the editor and test fixtures into dist/
-bun test                 # 513 tests incl. sim journeys and pixel goldens
+bun test                 # 519 tests incl. sim journeys and pixel goldens
 bunx tsc --noEmit        # typecheck, exit 0
 bun run desktop sunstone # build for the desktop host and open a window
                          # (also: grow, meadow; needs a Rust toolchain)

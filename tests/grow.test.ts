@@ -31,6 +31,7 @@ import {
   liveFrameAtTick,
   naturalStampAt,
   naturalTileAt,
+  warmWilderness,
   plazaCenter,
   stepGrowFrame,
   stepGrowTick,
@@ -578,6 +579,44 @@ describe("grow: virtual-time cadence is hz-portable", () => {
       expect(s.phase).toBe("done");
       expect(s.tick).toBe(done.tick);
       expect(worldSummary(s).hash).toBe(worldSummary(done).hash);
+    }
+  });
+});
+
+describe("grow: wilderness caches", () => {
+  const cells = (p: GrowParams, order: "rows" | "reverse" | "scattered") => {
+    const at: [number, number][] = [];
+    for (let y = -1; y <= p.height; y++) for (let x = -1; x < 180; x++) at.push([x, y]);
+    if (order === "reverse") at.reverse();
+    if (order === "scattered") {
+      for (let i = at.length - 1; i > 0; i--) {
+        const j = (Math.imul(i, 7_919) + 13 >>> 0) % (i + 1);
+        [at[i], at[j]] = [at[j]!, at[i]!];
+      }
+    }
+    return at.map(([x, y]) => `${x},${y}:${naturalTileAt(p, x, y)}`);
+  };
+
+  test("natural tiles do not depend on the order cells are first asked for", () => {
+    // Each params object owns its caches; a cache miss settles a whole 2x2
+    // block, so the visiting order must not leak into any cell.
+    const rows = cells({ ...DEFAULT_PARAMS }, "rows").sort();
+    expect(cells({ ...DEFAULT_PARAMS }, "reverse").sort()).toEqual(rows);
+    expect(cells({ ...DEFAULT_PARAMS }, "scattered").sort()).toEqual(rows);
+    expect(rows.filter((cell) => !cell.endsWith(":0")).length).toBeGreaterThan(1_000);
+  });
+
+  test("warming columns ahead of time leaves the same wilderness and biomes", () => {
+    const cold = { ...DEFAULT_PARAMS };
+    const warm = { ...DEFAULT_PARAMS };
+    warmWilderness(warm, 0, 179);
+    for (let y = 0; y < DEFAULT_PARAMS.height; y++) for (let x = 0; x < 180; x++) {
+      expect(naturalTileAt(warm, x, y)).toBe(naturalTileAt(cold, x, y));
+      expect(biomeAt(warm, x, y)).toBe(biomeAt(cold, x, y));
+    }
+    const done = growToDone(DEFAULT_PARAMS);
+    for (let y = 0; y < DEFAULT_PARAMS.height; y++) for (let x = 0; x < 180; x++) {
+      expect(wildernessTileAt({ ...done, params: warm }, x, y)).toBe(wildernessTileAt(done, x, y));
     }
   });
 });
