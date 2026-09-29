@@ -89,5 +89,22 @@ fields and commands are optional and the v1 spellings keep their meaning.
   cooker slices it into idle/left-step/right-step images for four facings.
   The original per-direction `atlases` walker declaration remains valid.
 
+## v1 amendment — 2026-09-29 (movement extensions)
+
+- **One-sided passage edges:** a sheet may declare `dirEdges`, keyed by
+  cell, with optional `enter` and `exit` direction lists. `enter` refuses
+  stepping into the cell across that edge; `exit` refuses leaving it across
+  that edge. The existing `dirBlock` keeps its symmetric meaning (both
+  leaving and entering through the edge).
+- **Routes on any event:** `moveRoute` takes an optional `target`
+  (`"player"`, `"this"` or `{ event: id }`) with the existing `wait`
+  semantics.
+- **Turn and path steps:** route steps `turnTowardPlayer`,
+  `{ turnToward: target }`, `{ pathTo: { x, y, retries? } }` and
+  `{ approach: { target, retries? } }`. Path searches are deterministic
+  breadth-first searches split across reference ticks (independent of the
+  host rate); a blocked step waits and replans at most `retries` times
+  before the route ends.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

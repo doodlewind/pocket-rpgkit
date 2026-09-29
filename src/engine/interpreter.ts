@@ -34,6 +34,7 @@ import type {
   MapDef,
   MoveRoute,
   Page,
+  RouteTarget,
 } from "./types.ts";
 
 export const TICK_HZ = 60;
@@ -255,7 +256,7 @@ export type Instr =
   | { op: "unlockInput" }
   | { op: "place"; target: "this" | { event: string }; x: number; y: number; dir: Dir | null }
   | { op: "transfer"; map: string; x: number; y: number; dir: Dir | "keep"; fadeFrames: number }
-  | { op: "moveRoute"; target: "player" | "this"; wait: boolean; route: MoveRoute }
+  | { op: "moveRoute"; target: RouteTarget; wait: boolean; route: MoveRoute }
   | { op: "common"; id: string };
 
 export type Prog = Instr[];
@@ -459,7 +460,9 @@ export interface PendingTransfer {
 }
 export interface PendingMoveRoute {
   fiber: string;
-  target: "player" | "this";
+  /** "player" drives the mover; {event} is the ALREADY-RESOLVED map event
+   *  id ("this" resolves to the running fiber's own event). */
+  target: "player" | { event: string };
   eventId: string;
   route: MoveRoute;
   /** true: the fiber parked in "external" mode and the session resumes it
@@ -1138,13 +1141,22 @@ function runFiber(
           fadeFrames: ins.fadeFrames,
         };
         return;
-      case "moveRoute":
+      case "moveRoute": {
+        // Resolve "this" to the running fiber's own event id at publish
+        // time; the session then only distinguishes the player from a map
+        // event (routes may target any event).
+        const ownEventId = f.key.split("/").pop()!;
+        const target: "player" | { event: string } =
+          ins.target === "player" ? "player"
+          : ins.target === "this" ? { event: ownEventId }
+          : ins.target;
+        const eventId = target === "player" ? ownEventId : target.event;
         if (!ins.wait) {
           // Fire-and-forget route: P1④ walks it, this fiber continues now.
           s.pendingMoveRoutes.push({
             fiber: f.key,
-            target: ins.target,
-            eventId: f.key.split("/").pop()!,
+            target,
+            eventId,
             route: ins.route,
             wait: false,
           });
@@ -1154,12 +1166,13 @@ function runFiber(
         f.mode = "external";
         s.pendingMoveRoutes.push({
           fiber: f.key,
-          target: ins.target,
-          eventId: f.key.split("/").pop()!,
+          target,
+          eventId,
           route: ins.route,
           wait: true,
         });
         return;
+      }
       case "common": {
         const prog = w.commonPrograms.get(ins.id);
         if (!prog) {

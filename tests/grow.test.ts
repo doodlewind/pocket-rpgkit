@@ -503,7 +503,7 @@ describe("grow: rule invariants", () => {
       expect(s.road[y * s.params.width + x]).toBe(1);
       const move = { moveDown: [0, 1], moveLeft: [-1, 0], moveRight: [1, 0], moveUp: [0, -1] } as const;
       for (const step of v.route) {
-        if (step === "wait") continue;
+        if (typeof step !== "string" || step === "wait") continue;
         if (step in move) {
           const [dx, dy] = move[step as keyof typeof move];
           x += dx;

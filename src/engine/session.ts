@@ -55,9 +55,21 @@ import {
   placeChar,
   stepChars,
   syncPages,
+  BFS_CELLS_PER_TICK,
+  DEFAULT_PATH_RETRIES,
+  PATH_REPLAN_TICKS,
   type CharsState,
   type MotionType,
+  type PathPlan,
 } from "./chars.ts";
+import {
+  approachSide,
+  approachStand,
+  advancePathSearch,
+  clonePathSearch,
+  createPathSearch,
+  facingToward,
+} from "./pathfind.ts";
 import {
   initialMovement,
   stepFrames,
@@ -99,6 +111,10 @@ interface PlayerRoute {
    *  origin boundary before the first route command, so a command face
    *  cannot redirect the committed step into an unchecked cell. */
   takeOver: boolean;
+  /** Expansion state for the current pathTo/approach step. */
+  plan: PathPlan | null;
+  /** Remaining replans for the current path step; survives plan rebuilds. */
+  pathRetriesLeft: number | null;
 }
 
 export interface SessionState {
@@ -286,7 +302,20 @@ export function stepSession(
     interp,
     fade: s0.fade ? { ...s0.fade } : null,
     playerRoute: s0.playerRoute
-      ? { ...s0.playerRoute, steps: [...s0.playerRoute.steps] }
+      ? {
+          ...s0.playerRoute,
+          steps: [...s0.playerRoute.steps],
+          plan: s0.playerRoute.plan
+            ? {
+                ...s0.playerRoute.plan,
+                dirs: [...s0.playerRoute.plan.dirs],
+                search: clonePathSearch(s0.playerRoute.plan.search),
+                approach: s0.playerRoute.plan.approach
+                  ? { ...s0.playerRoute.plan.approach }
+                  : null,
+              }
+            : null,
+        }
       : null,
   };
   s.frame++;
@@ -447,8 +476,18 @@ function stepReferenceTick(
         phase: 0,
         dir: s.move.facing,
         takeOver: s.move.moving,
+        plan: null,
+        pathRetriesLeft: null,
       };
     } else {
+      // A route to an event with no live character (no active page, or it
+      // was erased) cannot run: resume a waiting caller immediately rather
+      // than park its external fiber forever (MV: a Set Movement Route on
+      // an absent map event is a no-op).
+      if (!s.chars.chars[req.eventId]) {
+        if (req.wait) s.interp = continueExternal(s.interp, req.fiber);
+        continue;
+      }
       const installed = installRoute(
         s.chars,
         req.eventId,
@@ -507,13 +546,16 @@ function applyTransfer(
 // landing tick of the last step.
 // ---------------------------------------------------------------------------
 
-const FACE: Partial<Record<MoveStep, Dir4>> = {
+/** The string-verb move steps the FACE/MOVE lookup tables cover; object
+ *  path steps are handled separately. */
+type VerbMoveStep = Extract<MoveStep, string>;
+const FACE: Partial<Record<VerbMoveStep, Dir4>> = {
   faceDown: 0,
   faceLeft: 1,
   faceUp: 2,
   faceRight: 3,
 };
-const MOVE: Partial<Record<MoveStep, Dir4>> = {
+const MOVE: Partial<Record<VerbMoveStep, Dir4>> = {
   moveDown: 0,
   moveLeft: 1,
   moveUp: 2,
@@ -574,6 +616,20 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
     m.stepDir = r.dir;
     m.moving = false;
     r.phase = 0;
+    // The final internal step of a pathTo/approach plan lands here.
+    // Apply the approach arrival-facing and advance the route pc once.
+    if (r.plan?.done) {
+      const ap = r.plan.approach;
+      if (ap) {
+        const tc = resolvePlayerTarget(ap.target, s);
+        if (tc) {
+          const f = facingToward(m.tx, m.ty, tc.x, tc.y);
+          if (f !== null) { m.facing = f; m.stepDir = f; }
+        }
+      }
+      advance();
+      return;
+    }
     // fall through to the next command on this landing tick
   }
 
@@ -587,7 +643,9 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
     endPlayerRoute(s);
     return;
   }
-  const advance = (): boolean => {
+  function advance(): boolean {
+    r.plan = null;
+    r.pathRetriesLeft = null;
     r.pc++;
     if (r.pc < r.steps.length) return false;
     if (r.repeat) r.pc = 0;
@@ -596,7 +654,32 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
       return true;
     }
     return false;
-  };
+  }
+
+  // --- turn / path steps ---------------------------------------------------
+  if (typeof step === "object") {
+    if ("turnToward" in step) {
+      const tc = resolvePlayerTarget(step.turnToward, s);
+      if (tc) {
+        const f = facingToward(m.tx, m.ty, tc.x, tc.y);
+        if (f !== null) { r.dir = f; m.facing = f; m.stepDir = f; }
+      }
+      advance();
+      return;
+    }
+    if ("pathTo" in step || "approach" in step) {
+      stepPlayerPath(s, sess, table, step, advance);
+      return;
+    }
+    advance(); // unknown object step: skip defensively
+    return;
+  }
+  if (step === "turnTowardPlayer") {
+    // The player turning toward the player is a no-op turn; keep facing.
+    advance();
+    return;
+  }
+
   const faceDir = FACE[step];
   if (faceDir !== undefined) {
     r.dir = faceDir;
@@ -649,3 +732,144 @@ function stepPlayerRoute(s: SessionState, sess: Session): void {
   m.py = py;
   if (r.repeat && r.pc >= r.steps.length) r.pc = 0;
 }
+
+/** Resolve a route target character to its live cell for a PLAYER route.
+ *  The player is always at the mover's own cell; an event resolves through
+ *  its live character cell, else its authored origin. */
+function resolvePlayerTarget(
+  target: "player" | { event: string },
+  s: SessionState,
+): { x: number; y: number } | null {
+  if (target === "player") return { x: s.move.tx, y: s.move.ty };
+  const ch = s.chars.chars[target.event];
+  if (ch) return { x: ch.tx, y: ch.ty };
+  return null;
+}
+
+/** Expand/walk one player pathTo or approach step for this reference tick.
+ *  The stamped table already carries blocks:true bodies, so the BFS needs
+ *  no extra occupancy set. The authored pc advances only when the whole
+ *  plan is consumed; `advance` handles repeat/finish/waiter release. */
+function stepPlayerPath(
+  s: SessionState,
+  sess: Session,
+  table: PassageTable,
+  step: Extract<MoveStep, { pathTo: unknown }> | Extract<MoveStep, { approach: unknown }>,
+  advance: () => boolean,
+): void {
+  const r = s.playerRoute!;
+  const m = s.move;
+  const cfg = sess.cfg;
+
+  if (r.plan === null) {
+    let gx: number;
+    let gy: number;
+    let approach: PathPlan["approach"] = null;
+    if ("pathTo" in step) {
+      gx = step.pathTo.x;
+      gy = step.pathTo.y;
+    } else {
+      const target = step.approach.target;
+      if (target === "player") { endPlayerRoute(s); return; }
+      const tc = resolvePlayerTarget(target, s);
+      if (!tc) { endPlayerRoute(s); return; }
+      let side: Dir4;
+      if (step.approach.side) {
+        side = DIR4_PLAYER[step.approach.side]!;
+      } else {
+        const resolved = approachSide(m.tx, m.ty, tc.x, tc.y);
+        if (resolved === null) { advance(); return; }
+        side = resolved;
+      }
+      const distance = step.approach.distance ?? 1;
+      const stand = approachStand(tc.x, tc.y, side, distance);
+      gx = stand.x;
+      gy = stand.y;
+      approach = { target, side, distance };
+    }
+
+    if (gx === m.tx && gy === m.ty) {
+      if (approach) {
+        const tc = resolvePlayerTarget(approach.target, s);
+        if (tc) {
+          const f = facingToward(m.tx, m.ty, tc.x, tc.y);
+          if (f !== null) { r.dir = f; m.facing = f; m.stepDir = f; }
+        }
+      }
+      advance();
+      return;
+    }
+
+    if (r.pathRetriesLeft === null) {
+      r.pathRetriesLeft =
+        ("pathTo" in step ? step.pathTo.retries : step.approach.retries) ?? DEFAULT_PATH_RETRIES;
+    }
+    // Route around every live character body, including below-character
+    // (blocks:false) events, the way a character route excludes `others`.
+    // The stamped table already contributes blocks:true terrain opinions.
+    const cells = new Set<number>();
+    for (const o of Object.values(s.chars.chars)) {
+      cells.add(o.ty * table.width + o.tx);
+      if (o.moving) cells.add((o.ty + DY[o.stepDir]) * table.width + (o.tx + DX[o.stepDir]));
+    }
+    // Begin a frame-split BFS (one slice per reference tick).
+    const search = createPathSearch(table, m.tx, m.ty, gx, gy, cells);
+    if (search === null) { endPlayerRoute(s); return; }
+    r.plan = { search, dirs: [], blockedTicks: 0, done: false, approach };
+  }
+
+  const plan = r.plan;
+  if (!plan) return;
+  if (plan.search) {
+    const res = advancePathSearch(plan.search, table, BFS_CELLS_PER_TICK);
+    if (!res.done) return; // still computing; no movement this tick
+    plan.search = null;
+    if (res.path === null) {
+      plan.dirs = [];
+      plan.blockedTicks = 1;
+    } else if (res.path.length === 0) {
+      if (plan.approach) {
+        const tc = resolvePlayerTarget(plan.approach.target, s);
+        if (tc) {
+          const f = facingToward(m.tx, m.ty, tc.x, tc.y);
+          if (f !== null) { r.dir = f; m.facing = f; m.stepDir = f; }
+        }
+      }
+      advance();
+      return;
+    } else {
+      plan.dirs = res.path;
+      plan.blockedTicks = 0;
+    }
+  }
+  if (plan.done) return; // the landing branch advances
+  const dir = plan.dirs[0];
+  if (dir === undefined) {
+    plan.blockedTicks++;
+    if (plan.blockedTicks < PATH_REPLAN_TICKS) return;
+    if (r.pathRetriesLeft! <= 0) { endPlayerRoute(s); return; }
+    r.pathRetriesLeft = r.pathRetriesLeft! - 1;
+    r.plan = null;
+    return;
+  }
+  r.dir = dir;
+  m.facing = dir;
+  m.stepDir = dir;
+  if (!canStepFrom(table, m.tx, m.ty, dir)) {
+    plan.blockedTicks++;
+    if (plan.blockedTicks < PATH_REPLAN_TICKS) return;
+    if (r.pathRetriesLeft! <= 0) { endPlayerRoute(s); return; }
+    r.pathRetriesLeft = r.pathRetriesLeft! - 1;
+    r.plan = null;
+    return;
+  }
+  r.phase = 1;
+  m.moving = true;
+  const { px, py } = stepPixels(m.tx * cfg.tile, m.ty * cfg.tile, dir, 1, cfg);
+  m.px = px;
+  m.py = py;
+  plan.dirs.shift();
+  if (plan.dirs.length === 0) plan.done = true;
+}
+
+const DIR4_PLAYER: Record<Dir, Dir4> = { down: 0, left: 1, up: 2, right: 3 };

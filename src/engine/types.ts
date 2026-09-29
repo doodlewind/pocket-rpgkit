@@ -28,17 +28,52 @@ export interface Sheet {
    *  crossing: the mask blocks LEAVING that cell through a named edge and
    *  ENTERING it through that same edge from outside (P1②, task-1206). */
   dirBlock?: Record<string, Dir[]>;
+  /** Cell index (as string) -> per-edge DIRECTIONAL passage rules. Unlike
+   *  `dirBlock` this is one-sided: a rule
+   *  guards ONLY the edge of the cell it is authored on, so a ledge/one-way
+   *  door can forbid "enter from the west" while leaving "leave to the
+   *  west" open. `enter` lists directions from which the cell may NOT be
+   *  entered (the step crosses that edge INTO the cell); `exit` lists
+   *  directions in which the cell may NOT be left. `dirBlock` keeps its
+   *  undirected meaning and the two combine (a crossing blocked by either
+   *  is blocked). */
+  dirEdges?: Record<string, { enter?: Dir[]; exit?: Dir[] }>;
 }
 
 // --- events ----------------------------------------------------------------
 
 export type Trigger = "action" | "playerTouch" | "autorun" | "parallel";
 
+/** A route target other than the mover itself: "player" or another map
+ *  event by id (MV Set Movement Route on any event). */
+export type RouteTarget = "player" | "this" | { event: string };
+
+/** Target of a turn-toward / approach step: the player or a named event. */
+export type CharTarget = "player" | { event: string };
+
+/** A deterministic-path step. The expansion runs when the step
+ *  STARTS, once:
+ *  - turnTowardPlayer / {turnToward} — face a live character in place.
+ *  - {pathTo} — deterministic 4-neighbour BFS to a tile. The BFS runs at
+ *    the step's first boundary tick. An unreachable path or blocked next
+ *    step waits a bounded interval, then recomputes from live state up to
+ *    `retries` times (default 10) before the route continues.
+ *  - {approach} — BFS to the adjacent tile on a character's side and face
+ *    that character on arrival. `side` says which side of the target to
+ *    stand on (a step from that side TOWARD the target enters it); default
+ *    is the mover's current side; `distance` defaults to 1. */
+export type PathStep =
+  | "turnTowardPlayer"
+  | { turnToward: CharTarget }
+  | { pathTo: { x: number; y: number; retries?: number } }
+  | { approach: { target: CharTarget; side?: Dir; distance?: number; retries?: number } };
+
 export type MoveStep =
   | "moveDown" | "moveLeft" | "moveRight" | "moveUp"
   | "stepForward"
   | "faceDown" | "faceLeft" | "faceRight" | "faceUp"
-  | "wait" | "turnRandom";
+  | "wait" | "turnRandom"
+  | PathStep;
 
 export interface MoveRoute {
   steps: MoveStep[];
@@ -83,7 +118,7 @@ export type Command =
   | { op: "selfSwitch"; key: "A" | "B" | "C" | "D"; value: boolean }
   | { op: "if"; if: Condition; then: Command[]; else?: Command[] }
   | { op: "transfer"; map: string; x: number; y: number; dir?: Dir | "keep"; fade?: number }
-  | { op: "moveRoute"; target: "player" | "this"; wait?: boolean; route: MoveRoute }
+  | { op: "moveRoute"; target: RouteTarget; wait?: boolean; route: MoveRoute }
   | { op: "wait"; seconds: number }
   | { op: "gold"; set: "add" | "sub"; amount: number }
   | { op: "item"; item: string; set: "add" | "sub"; count: number }

@@ -14,8 +14,13 @@ state.
 - `tiles.ts` — tile ids and the baked-chunk constants.
 - `motion-clock.ts` — the fixed 60 Hz motion reference and how many
   reference ticks one host frame folds.
-- `passability.ts`, `movement.ts` — tile collision (dual-edge `dirBlock`
-  masks, blocking bodies) and the grid mover.
+- `passability.ts`, `movement.ts` — tile collision (undirected `dirBlock`
+  plus one-sided `dirEdges`, cooked into flat solid/edge masks with
+  blocking bodies) and the grid mover.
+- `pathfind.ts` — deterministic 4-neighbour BFS behind the `pathTo` /
+  `approach` move steps (fixed neighbour order, respects all edge guards
+  and bodies; the search is sliced across reference ticks to bound QuickJS
+  frame cost).
 - `interpreter.ts` — event pages, triggers, the 18-command interpreter
   (the v1 15 plus `lockInput` / `unlockInput` / `place`), the typewriter
   clock, the seeded RNG, saveable switch state.

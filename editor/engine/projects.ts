@@ -112,6 +112,28 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
             "uniqueItems": true
           },
           "description": "Map key is the cell index (as string); value lists the cell's blocked edge directions: each blocks both leaving that cell through the edge and entering it through that edge from outside."
+        },
+        "dirEdges": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enter": {
+                "type": "array",
+                "items": { "enum": ["down", "left", "right", "up"] },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "exit": {
+                "type": "array",
+                "items": { "enum": ["down", "left", "right", "up"] },
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            }
+          },
+          "description": "Map key is the cell index (as string); one-sided directional passage. 'enter' lists directions from which the cell may NOT be entered (a step crosses that edge INTO the cell); 'exit' lists directions in which the cell may NOT be left. Unlike dirBlock each rule guards only its own cell, so asymmetric/one-way edges (jump-down ledges, one-way doors) are expressible; the undirected dirBlock keeps its meaning and both apply."
         }
       }
     },
@@ -406,7 +428,7 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
           "required": ["op", "target", "route"],
           "properties": {
             "op": { "const": "moveRoute" },
-            "target": { "enum": ["player", "this"] },
+            "target": { "$ref": "#/$defs/routeTarget" },
             "wait": { "type": "boolean" },
             "route": {
               "type": "object",
@@ -515,13 +537,90 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
       ]
     },
 
+    "charTarget": {
+      "oneOf": [
+        { "const": "player" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": {
+            "event": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "description": "The player or a map event by id."
+    },
+    "routeTarget": {
+      "oneOf": [
+        { "enum": ["player", "this"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": {
+            "event": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "description": "Who a forced route drives: the player, the running event, or another map event."
+    },
     "moveStep": {
-      "enum": [
-        "moveDown", "moveLeft", "moveRight", "moveUp",
-        "stepForward",
-        "faceDown", "faceLeft", "faceRight", "faceUp",
-        "wait", "turnRandom"
-      ]
+      "oneOf": [
+        {
+          "enum": [
+            "moveDown", "moveLeft", "moveRight", "moveUp",
+            "stepForward",
+            "faceDown", "faceLeft", "faceRight", "faceUp",
+            "wait", "turnRandom"
+          ]
+        },
+        { "const": "turnTowardPlayer" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["turnToward"],
+          "properties": {
+            "turnToward": { "$ref": "#/$defs/charTarget" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pathTo"],
+          "properties": {
+            "pathTo": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y"],
+              "properties": {
+                "x": { "type": "integer", "minimum": 0 },
+                "y": { "type": "integer", "minimum": 0 },
+                "retries": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approach"],
+          "properties": {
+            "approach": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["target"],
+              "properties": {
+                "target": { "$ref": "#/$defs/charTarget" },
+                "side": { "enum": ["down", "left", "right", "up"] },
+                "distance": { "type": "integer", "minimum": 1 },
+                "retries": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      ],
+      "description": "A move-route command. turnTowardPlayer faces the live player; {turnToward} faces a character; {pathTo} expands at the step start with a deterministic 4-way BFS, waits a bounded interval when unreachable or blocked, and allows 'retries' full replans (default 10) before continuing the route; {approach} pathfinds to the adjacent tile on the target's side (the side a step to the target enters from) and faces the target on arrival."
     },
     "condition": {
       "oneOf": [

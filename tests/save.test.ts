@@ -507,6 +507,31 @@ describe("P1⑤ save — deep structural validation (F4/1173)", () => {
       since: 0, erase: false, ...fiber,
     };
   }
+  test("a parallel program containing a cross-event path route remains loadable", () => {
+    const encoded = checksummed((s) => {
+      parkParallel(s, {
+        stack: [{
+          prog: [{
+            op: "moveRoute",
+            target: { event: "scout" },
+            wait: false,
+            route: {
+              steps: [
+                "turnTowardPlayer",
+                { pathTo: { x: 8, y: 4, retries: 2 } },
+                { approach: { target: "player", side: "left", distance: 1 } },
+              ],
+              repeat: false,
+              skippable: false,
+            },
+          }, { op: "exit" }],
+          pc: 0,
+        }],
+        mode: "run",
+      });
+    });
+    expect(() => decodeEnvelopeText(encoded)).not.toThrow();
+  });
   rejects("a wait fiber parked past its program", (s) => {
     parkParallel(s, { stack: [{ prog: [{ op: "wait", frames: 1 }], pc: 1 }], mode: "wait" });
   });
@@ -559,6 +584,20 @@ describe("P1⑤ save — deep structural validation (F4/1173)", () => {
         prog: [{
           op: "moveRoute", target: "player", wait: false,
           route: { steps: ["moveSideways"], repeat: false, skippable: false },
+        }, { op: "exit" }], pc: 0,
+      }], mode: "run",
+    });
+  });
+  rejects("an approach route with zero distance", (s) => {
+    parkParallel(s, {
+      stack: [{
+        prog: [{
+          op: "moveRoute", target: "player", wait: false,
+          route: {
+            steps: [{ approach: { target: { event: "scout" }, distance: 0 } }],
+            repeat: false,
+            skippable: false,
+          },
         }, { op: "exit" }], pc: 0,
       }], mode: "run",
     });

@@ -20,18 +20,37 @@ import {
   stepSession,
   type SessionState,
 } from "../../../src/engine/session.ts";
+import { BFS_CELLS_PER_TICK } from "../../../src/engine/chars.ts";
+import { buildPassage } from "../../../src/engine/passability.ts";
+import { advancePathSearch, bfsPath, createPathSearch, type PathSearchState } from "../../../src/engine/pathfind.ts";
+import type { Sheet } from "../../../src/engine/types.ts";
 import {
   createSnapshot,
   decodeEnvelopeText,
   encodeEnvelope,
 } from "../../../src/engine/save.ts";
-import { buildAreaScanMap, buildEventModelProject } from "./project.ts";
+import {
+  buildAreaScanMap,
+  buildConcurrentPathBenchProject,
+  buildEventModelProject,
+  buildPathBenchMap,
+} from "./project.ts";
 
 export interface EventModelFixtureApi {
   state(): SessionState;
   snapshot(): string;
   restore(envelope: string): void;
+  /** Serialize the WHOLE live SessionState (player pixel phase, every
+   *  character's mid-step route/path plan, the parked external fiber) so a
+   *  save can be taken while a forced route is mid-tile and restored to a
+   *  fold that matches the uninterrupted one. Unlike snapshot() this is not
+   *  the safe-point slot envelope; it exists to prove mid-movement
+   *  continuity of the pure reducers. */
+  snapshotFull(): string;
+  restoreFull(text: string): void;
   bench(areas: boolean): void;
+  /** QuickJS pathfinding bench selector; null returns to gameplay. */
+  benchPath(mode: null | "open" | "ten" | "incr" | "real-ten"): void;
 }
 
 declare global {
@@ -50,6 +69,66 @@ const scanInput = {
   prevCell: { x: 0, y: 0 },
   facing: 0 as const,
 };
+
+// Pathfinding QuickJS bench: cooked once, reused every measured frame so
+// the timed work is the BFS alone.
+const PATH_SHEET: Sheet = { id: "tiles", cols: 1, rows: 1, pak: "tiles", defaultPassage: "pass" };
+const PATH_SHEETS = new Map<string, Sheet>([["tiles", PATH_SHEET]]);
+const pathTableOpen = buildPassage(buildPathBenchMap(false), PATH_SHEETS);
+// Ten deterministically spread (start,goal) pairs across the open 100x100.
+const PATH_PAIRS: Array<[number, number, number, number]> = Array.from({ length: 10 }, (_, i) => [
+  (i * 7) % 100,
+  (i * 13) % 100,
+  (99 - ((i * 7) % 100) + 100) % 100,
+  (99 - ((i * 13) % 100) + 100) % 100,
+]);
+/** null = area scan (legacy); "open" = one worst-case synchronous corner
+ *  BFS/frame; "ten" = ten synchronous spread BFS/frame (upper bound);
+ *  "incr" = ten FRAME-SPLIT searches, BFS_CELLS_PER_TICK cells each/frame
+ *  (the real per-frame cost when ten NPCs pathfind at once). */
+let pathBenchMode: null | "open" | "ten" | "incr" | "real-ten" = null;
+// The ten live incremental searches, restarted as each reaches its goal.
+let incrSearches: PathSearchState[] = [];
+const realPathProject = buildConcurrentPathBenchProject();
+const realPathSession = createSession(realPathProject);
+let realPathState = startSession(realPathProject, realPathSession);
+
+function resetRealPathBench(): void {
+  realPathState = startSession(realPathProject, realPathSession);
+  // First frame starts the autorun and installs all ten fire-and-forget
+  // routes. Measured frames then enter the real session/character fold.
+  realPathState = stepSession(realPathSession, realPathState, { buttons: 0 });
+}
+
+function pathBenchFrame(): void {
+  if (pathBenchMode === "real-ten") {
+    realPathState = stepSession(realPathSession, realPathState, { buttons: 0 });
+    return;
+  }
+  if (pathBenchMode === "open") {
+    // Corner to opposite corner: maximum Manhattan distance, visits all
+    // 10,000 cells in the fixed-order search.
+    bfsPath(pathTableOpen, 0, 0, 99, 99);
+    return;
+  }
+  if (pathBenchMode === "ten") {
+    for (const [sx, sy, gx, gy] of PATH_PAIRS) bfsPath(pathTableOpen, sx, sy, gx, gy);
+    return;
+  }
+  // incr: advance each of the ten searches one slice; restart a finished
+  // one so every measured frame carries steady-state slice work.
+  if (incrSearches.length === 0) {
+    incrSearches = PATH_PAIRS.map(([sx, sy, gx, gy]) => createPathSearch(pathTableOpen, sx, sy, gx, gy)!)
+      .filter((s): s is PathSearchState => s !== null);
+  }
+  for (let i = 0; i < incrSearches.length; i++) {
+    const res = advancePathSearch(incrSearches[i]!, pathTableOpen, BFS_CELLS_PER_TICK);
+    if (res.done) {
+      const [sx, sy, gx, gy] = PATH_PAIRS[i]!;
+      incrSearches[i] = createPathSearch(pathTableOpen, sx, sy, gx, gy)!;
+    }
+  }
+}
 
 function EventModelFixture() {
   const project = buildEventModelProject();
@@ -106,14 +185,29 @@ function EventModelFixture() {
       prevButtons = snap.held;
       publish();
     },
+    snapshotFull: () => JSON.stringify(state),
+    restoreFull: (text) => {
+      state = JSON.parse(text) as SessionState;
+      publish();
+    },
     bench: (areas) => {
       globalThis.__eventModelBenchMode = true;
+      pathBenchMode = null;
       benchAreas = areas;
       benchState = createInterpState();
+    },
+    benchPath: (mode) => {
+      globalThis.__eventModelBenchMode = false;
+      pathBenchMode = mode;
+      if (mode === "real-ten") resetRealPathBench();
     },
   };
 
   onFrame((buttons) => {
+    if (pathBenchMode) {
+      pathBenchFrame();
+      return;
+    }
     if (globalThis.__eventModelBenchMode) {
       benchState = stepInterp(benchAreas ? scanWorld : emptyWorld, benchState, scanInput);
       return;

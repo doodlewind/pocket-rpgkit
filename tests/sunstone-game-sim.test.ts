@@ -400,11 +400,12 @@ simDescribe("sunstone — render budget", () => {
     // of framework growth since the 780218d7 base the game was built on
     // (the meadow example grew by the same amount). The shared runtime every
     // game bundles has since grown by the streamed and animated map
-    // renderers, both walker heights and the extended event model (areas,
-    // compound and facing conditions, place, input lock): 331 KB. The
-    // bound keeps a few percent of headroom so an accidental bundle-in
-    // still trips it.
-    expect(jsBytes).toBeLessThan(345_000);
+    // renderers, both walker heights, the extended event model (areas,
+    // compound and facing conditions, place, input lock) and the movement
+    // extensions (one-sided passage, routes on any event, turn/pathTo/
+    // approach, memoized passage cooking): 351 KB. The bound keeps a few
+    // percent of headroom so an accidental bundle-in still trips it.
+    expect(jsBytes).toBeLessThan(365_000);
   });
 });
 

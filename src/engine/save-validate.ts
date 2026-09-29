@@ -91,14 +91,64 @@ function validateCondition(v: unknown, path: string): string | null {
 
 const MOVE_STEPS = new Set([
   "moveDown", "moveLeft", "moveRight", "moveUp",
+  "stepForward",
   "faceDown", "faceLeft", "faceRight", "faceUp",
   "wait", "turnRandom",
+  "turnTowardPlayer",
 ]);
+
+const MOVE_DIRS = new Set(["down", "left", "right", "up"]);
+
+/** One route step: a legacy verb string or an object step
+ *  ({turnToward}/{pathTo}/{approach}). */
+function validateMoveStep(step: unknown, path: string): string | null {
+  if (typeof step === "string") {
+    return MOVE_STEPS.has(step) ? null : fail(path, "unknown move-step verb");
+  }
+  if (!isRecord(step)) return fail(path, "move step must be a string or object");
+  if ("turnToward" in step) {
+    const t = step.turnToward;
+    if (t !== "player" && !(isRecord(t) && typeof t.event === "string" && t.event.length > 0)) {
+      return fail(`${path}.turnToward`, "'player' or {event} required");
+    }
+    return null;
+  }
+  if ("pathTo" in step) {
+    const p = step.pathTo;
+    if (!isRecord(p) || !isNonNegInt(p.x) || !isNonNegInt(p.y)) {
+      return fail(`${path}.pathTo`, "{x,y} non-negative integers required");
+    }
+    if (p.retries !== undefined && !isNonNegInt(p.retries)) {
+      return fail(`${path}.pathTo.retries`, "non-negative integer required");
+    }
+    return null;
+  }
+  if ("approach" in step) {
+    const a = step.approach;
+    if (!isRecord(a)) return fail(`${path}.approach`, "object required");
+    if (a.target !== "player" && !(isRecord(a.target) && typeof a.target.event === "string" && a.target.event.length > 0)) {
+      return fail(`${path}.approach.target`, "'player' or {event} required");
+    }
+    if (a.side !== undefined && !MOVE_DIRS.has(a.side as string)) {
+      return fail(`${path}.approach.side`, "down|left|right|up required");
+    }
+    if (a.distance !== undefined && (!isNonNegInt(a.distance) || a.distance < 1)) {
+      return fail(`${path}.approach.distance`, "positive integer required");
+    }
+    if (a.retries !== undefined && !isNonNegInt(a.retries)) {
+      return fail(`${path}.approach.retries`, "non-negative integer required");
+    }
+    return null;
+  }
+  return fail(path, "unknown move-step object");
+}
 
 function validateMoveRoute(v: unknown, path: string): string | null {
   if (!isRecord(v)) return fail(path, "move route must be an object");
-  if (!Array.isArray(v.steps) || !v.steps.every((s) => typeof s === "string" && MOVE_STEPS.has(s))) {
-    return fail(`${path}.steps`, "array of move-step verbs required");
+  if (!Array.isArray(v.steps)) return fail(`${path}.steps`, "array of move steps required");
+  for (let i = 0; i < v.steps.length; i++) {
+    const e = validateMoveStep(v.steps[i], `${path}.steps[${i}]`);
+    if (e) return e;
   }
   if (typeof v.repeat !== "boolean") return fail(`${path}.repeat`, "boolean required");
   if (typeof v.skippable !== "boolean") return fail(`${path}.skippable`, "boolean required");
@@ -261,8 +311,12 @@ function validateProg(prog: unknown, path: string): string | null {
         break;
       }
       case "moveRoute": {
-        if (ins.target !== "player" && ins.target !== "this") {
-          return fail(`${here}.target`, "player|this required");
+        if (
+          ins.target !== "player" &&
+          ins.target !== "this" &&
+          !(isRecord(ins.target) && typeof ins.target.event === "string" && ins.target.event.length > 0)
+        ) {
+          return fail(`${here}.target`, "player|this|{event: id} required");
         }
         const e = validateMoveRoute(ins.route, `${here}.route`);
         if (e) return e;

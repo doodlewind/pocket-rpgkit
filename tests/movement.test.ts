@@ -3,7 +3,7 @@
 // clamp, facing, chaining). Pure bun, no host/framework imports.
 
 import { describe, expect, test } from "bun:test";
-import { buildPassage, canEnter, canStepFrom, cellBlocksEntry, cellBlocksExit, isStandable, stampBlockedCells, BLOCK, PASS, type Dir4 } from "../src/engine/passability.ts";
+import { buildPassage, canEnter, canStepFrom, cellBlocksEntry, cellBlocksExit, isStandable, setPassageOverride, stampBlockedCells, BLOCK, PASS, type Dir4 } from "../src/engine/passability.ts";
 import {
   dirFromButtons,
   initialMovement,
@@ -125,6 +125,76 @@ describe("passability", () => {
     expect(canEnter(table, 5, 1)).toBe(true); // reopened void (a gate)
   });
 
+  test("a runtime override synchronizes solid while preserving source edges", () => {
+    const sheet: Sheet = {
+      id: "edge",
+      cols: 1,
+      rows: 1,
+      defaultPassage: "pass",
+      dirEdges: { "0": { exit: ["right"] } },
+    };
+    const { table } = map10(new Array(100).fill("edge.0"), undefined, [sheet]);
+    const at = 2 * table.width + 3;
+
+    expect(canEnter(table, 3, 2)).toBe(true);
+    expect(cellBlocksExit(table, 3, 2, 3)).toBe(true);
+    setPassageOverride(table, at, BLOCK);
+    expect(canEnter(table, 3, 2)).toBe(false);
+    expect(cellBlocksExit(table, 3, 2, 3)).toBe(true);
+    setPassageOverride(table, at, PASS);
+    expect(canEnter(table, 3, 2)).toBe(true);
+    expect(cellBlocksExit(table, 3, 2, 3)).toBe(true);
+    setPassageOverride(table, at, 0);
+    expect(canEnter(table, 3, 2)).toBe(true);
+    expect(cellBlocksExit(table, 3, 2, 3)).toBe(true);
+    expect(() => setPassageOverride(table, -1, BLOCK)).toThrow();
+  });
+
+  test("reused tile opinions keep build-time overrides cell-local", () => {
+    const sheet: Sheet = {
+      id: "edge",
+      cols: 1,
+      rows: 1,
+      defaultPassage: "pass",
+      dirBlock: { "0": ["left"] },
+      dirEdges: { "0": { enter: ["up"], exit: ["right"] } },
+    };
+    const ground = new Array<TileId>(100).fill("edge.0");
+    const { table } = map10(ground, [[1, "block"], [2, "pass"]], [sheet]);
+
+    // Cell 3 shares the tile with the overridden cells 1 and 2 and directly
+    // follows them, so a BLOCK or PASS opinion leaking into the reused tile
+    // opinion shows up there.
+    expect([...table.solid.slice(0, 4)]).toEqual([0, 1, 0, 0]);
+    expect([...table.entryMask.slice(0, 4)]).toEqual([6, 0, 0, 6]);
+    expect([...table.exitMask.slice(0, 4)]).toEqual([10, 10, 10, 10]);
+  });
+
+  test("reused tile opinions are keyed by sheet and cell together", () => {
+    const a: Sheet = {
+      id: "a", cols: 2, rows: 1, defaultPassage: "pass",
+      block: [1], dirBlock: { "0": ["left"] },
+    };
+    const b: Sheet = {
+      id: "b", cols: 2, rows: 1, defaultPassage: "block",
+      pass: [1], dirEdges: { "0": { enter: ["up"] }, "1": { exit: ["down"] } },
+    };
+    // a.0 b.0 a.1 b.1 a.0 b.0 ...: the same cell number appears on both sheets
+    // and each sheet carries two cells, so a cache keyed on only one half of
+    // the tile id collides.
+    const ground: TileId[] = [];
+    for (let i = 0; i < 100; i++) ground.push(`${i % 2 ? "b" : "a"}.${(i >> 1) % 2}`);
+    const { table } = map10(ground, [[4, "block"], [6, "pass"]], [a, b]);
+    // cells 0..11: a.0 b.0 a.1 b.1 a.0(BLOCK) b.0 a.1(PASS) b.1 a.0 b.0 a.1 b.1
+    expect([...table.solid.slice(0, 12)]).toEqual([0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0]);
+    expect([...table.entryMask.slice(0, 12)]).toEqual([2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
+    expect([...table.exitMask.slice(0, 12)]).toEqual([2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1]);
+    expect(canEnter(table, 1, 0)).toBe(false); // b.0 is solid although a.0 (also cell 0) is open
+    expect(canEnter(table, 2, 0)).toBe(false); // a.1 is on sheet a's block list
+    expect(canEnter(table, 8, 0)).toBe(true); // a.0 after the BLOCK override on cell 4 is open again
+    expect(canEnter(table, 8, 0, 1)).toBe(false); // ... and still guards its left edge
+  });
+
   test("sheet defaultPassage=block with a pass cell exception", () => {
     const sheet: Sheet = { id: "wall", cols: 4, rows: 4, defaultPassage: "block", pass: [7] };
     const { table } = map10(new Array(100).fill("wall.0"), undefined, [sheet]);
@@ -167,6 +237,19 @@ describe("passability", () => {
     expect(isStandable(table, 1, 1)).toBe(false); // block list still rejects
   });
 
+  test("a sheet pass exception bypasses dirBlock only when entering", () => {
+    const sheet: Sheet = {
+      id: "edge", cols: 2, rows: 1, defaultPassage: "block",
+      pass: [1],
+      dirBlock: { "1": ["left"] },
+    };
+    const ground = new Array<TileId>(100).fill("edge.0");
+    ground[12] = "edge.1";
+    const { table } = map10(ground, undefined, [sheet]);
+    expect(canStepFrom(table, 1, 1, 3)).toBe(true); // pass wins for target entry
+    expect(canStepFrom(table, 2, 1, 1)).toBe(false); // source exit remains barred
+  });
+
   test("map.passage pass reopens a target reverse dirBlock edge", () => {
     const names = ["down", "left", "up", "right"] as const;
     const opposite = [2, 3, 0, 1] as const;
@@ -189,6 +272,7 @@ describe("passability", () => {
       };
       const table = buildPassage(map, new Map([[sheet.id, sheet]]));
       expect(canStepFrom(table, 2, 2, dir), names[dir]).toBe(true);
+      expect(canStepFrom(table, targetX, targetY, opposite[dir])).toBe(false);
     }
   });
 
@@ -585,6 +669,111 @@ describe("directional passage (task-1206: source exit and target entry edges)", 
       px: 16,
       moving: false,
     });
+  });
+});
+
+// --- K2/T2-18: one-sided directional passage (asymmetric one-way edges) ----
+
+/** A 5×3 table with one flagged cell (town.9 at (flaggedX,1)) carrying a
+ *  one-sided dirEdges rule, optionally alongside an undirected dirBlock. */
+function directedEdgesTable(
+  flaggedX: number,
+  edges: { enter?: Dir4[]; exit?: Dir4[] },
+  dirBlock: Dir4[] = [],
+) {
+  const width = 5;
+  const ground = new Array<TileId>(width * 3).fill("town.0");
+  ground[width + flaggedX] = "town.9";
+  const names = ["down", "left", "up", "right"] as const;
+  const of = (ds: Dir4[]) => ds.map((d) => names[d]!);
+  const sheet: Sheet = {
+    id: "town", cols: 10, rows: 1, defaultPassage: "pass",
+    dirEdges: { "9": {
+      ...(edges.enter ? { enter: of(edges.enter) } : {}),
+      ...(edges.exit ? { exit: of(edges.exit) } : {}),
+    } },
+    ...(dirBlock.length ? { dirBlock: { "9": of(dirBlock) } } : {}),
+  };
+  const map: MapDef = {
+    id: "directed-edges", name: "Directed edges", width, height: 3,
+    sheets: ["town"], ground, events: [],
+  };
+  return buildPassage(map, new Map([[sheet.id, sheet]]));
+}
+
+describe("one-sided directional passage (K2/T2-18: one-way edges)", () => {
+  test("an enter rule blocks only entry through that edge, never the reverse exit", () => {
+    // The flagged cell at (2,1) refuses entry from the west...
+    const table = directedEdgesTable(2, { enter: [1] });
+    expect(canStepFrom(table, 1, 1, 3)).toBe(false); // east INTO it: crosses left edge
+    expect(canEnter(table, 2, 1, 1)).toBe(false);
+    // ...but a character standing on it may leave west across the same edge.
+    expect(canStepFrom(table, 2, 1, 1)).toBe(true);
+    expect(cellBlocksExit(table, 2, 1, 1)).toBe(false);
+    expect(cellBlocksEntry(table, 2, 1, 1)).toBe(true);
+    // The other three edges stay open both ways.
+    expect(canStepFrom(table, 2, 1, 3)).toBe(true);
+    expect(canStepFrom(table, 2, 1, 0)).toBe(true);
+    expect(canStepFrom(table, 2, 1, 2)).toBe(true);
+    expect(canStepFrom(table, 2, 0, 0)).toBe(true); // entering from the north
+    expect(canStepFrom(table, 3, 1, 1)).toBe(true); // entering from the east
+  });
+
+  test("an exit rule blocks only leaving, never the reverse entry", () => {
+    // The flagged cell at (2,1) cannot be left southward...
+    const table = directedEdgesTable(2, { exit: [0] });
+    expect(canStepFrom(table, 2, 1, 0)).toBe(false);
+    expect(cellBlocksExit(table, 2, 1, 0)).toBe(true);
+    // ...but it can still be entered from the south (a jump-down ledge).
+    expect(canStepFrom(table, 2, 2, 2)).toBe(true);
+    expect(cellBlocksEntry(table, 2, 1, 0)).toBe(false);
+    // Leaving the other directions works.
+    expect(canStepFrom(table, 2, 1, 2)).toBe(true);
+    expect(canStepFrom(table, 2, 1, 1)).toBe(true);
+    expect(canStepFrom(table, 2, 1, 3)).toBe(true);
+  });
+
+  test("a ledge is one-way: jump down is allowed, climbing back is blocked", () => {
+    // Ledge lip at (2,1): entering the lip from the lower row is barred
+    // (a step up crosses the lip's DOWN/target edge), but stepping DOWN off
+    // the lip is the allowed jump direction (an enter rule never exits).
+    const table = directedEdgesTable(2, { enter: [0] });
+    expect(canStepFrom(table, 2, 2, 2)).toBe(false); // climb up onto the lip
+    expect(canStepFrom(table, 2, 1, 0)).toBe(true); // jump down off the lip
+  });
+
+  test("the mover refuses the blocked side of a one-way edge and crosses the open side", () => {
+    const table = directedEdgesTable(2, { enter: [1] }); // no entering from west
+    let blocked = initialMovement(1, 1, 3, CFG);
+    for (let f = 0; f < STEP * 2; f++) blocked = stepMovement(blocked, BTN_BITS.RIGHT, table, CFG);
+    expect({ tx: blocked.tx, px: blocked.px, moving: blocked.moving }).toEqual({
+      tx: 1, px: 16, moving: false,
+    });
+    // Approach the same cell from the east and leave west through the edge.
+    let crossing = initialMovement(3, 1, 1, CFG);
+    for (let f = 0; f < STEP; f++) crossing = stepMovement(crossing, BTN_BITS.LEFT, table, CFG);
+    expect({ tx: crossing.tx, ty: crossing.ty }).toEqual({ tx: 2, ty: 1 });
+    for (let f = 0; f < STEP; f++) crossing = stepMovement(crossing, BTN_BITS.LEFT, table, CFG);
+    expect({ tx: crossing.tx, ty: crossing.ty }).toEqual({ tx: 1, ty: 1 });
+  });
+
+  test("dirBlock keeps its undirected meaning alongside dirEdges", () => {
+    // An undirected up bar plus a one-sided west-entry bar: up is blocked in
+    // BOTH directions (dirBlock), west entry by the one-sided rule only.
+    const table = directedEdgesTable(2, { enter: [1] }, [2]);
+    expect(canStepFrom(table, 2, 0, 0)).toBe(false); // dirBlock: enter from north
+    expect(canStepFrom(table, 2, 1, 2)).toBe(false); // dirBlock: leave north
+    expect(canStepFrom(table, 1, 1, 3)).toBe(false); // dirEdges: enter from west
+    expect(canStepFrom(table, 2, 1, 1)).toBe(true); // dirEdges: leaving west still open
+    // standability stays direction-agnostic.
+    expect(isStandable(table, 2, 1)).toBe(true);
+  });
+
+  test("a one-sided rule does not block entering a different sheet's cell", () => {
+    const table = directedEdgesTable(2, { enter: [1] });
+    // (1,1) is plain town.0, not the flagged town.9: the rule on cell 9
+    // cannot guard the neighbour.
+    expect(canStepFrom(table, 0, 1, 3)).toBe(true);
   });
 });
 

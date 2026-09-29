@@ -35,6 +35,15 @@ import { keyedRecord } from "./clone.ts";
 import { stepPixels, stepFrames, type MovementConfig } from "./movement.ts";
 import type { Dir4, PassageTable } from "./passability.ts";
 import { canStepFrom } from "./passability.ts";
+import {
+  advancePathSearch,
+  approachSide,
+  approachStand,
+  clonePathSearch,
+  createPathSearch,
+  facingToward,
+  type PathSearchState,
+} from "./pathfind.ts";
 import type { Dir, Facing, GameEvent, MapDef, MoveRoute, MoveStep } from "./types.ts";
 
 const DX = [0, -1, 0, 1] as const; // down, left, up, right
@@ -55,6 +64,47 @@ const IDLE_BEATS = 16;
 /** Approach pages only walk at the player inside this Manhattan radius. */
 export const APPROACH_SIGHT = 6;
 
+/** Boundary ticks a pathTo/approach step waits on a blocked first step
+ *  before recomputing the whole BFS (one tile step is stepFrames=8 ticks). */
+export const PATH_REPLAN_TICKS = 8;
+/** Full replans a path step allows before it completes anyway (Tuxemon's
+ *  path controller stops the blocking action when the waypoint never
+ *  clears), so a waited route cannot park its fiber forever. */
+export const DEFAULT_PATH_RETRIES = 10;
+/** Cells one path search dequeues per reference tick when frame-split. Ten
+ *  concurrent searches at 60 Hz expand about 10x this per host frame; the
+ *  budget leaves headroom below the measured QuickJS 2 ms p95 target. The
+ *  BFS result is identical to a synchronous search; only its latency is
+ *  spread. */
+export const BFS_CELLS_PER_TICK = 250;
+
+/** The expanded plan behind one pathTo/approach route step. */
+export interface PathPlan {
+  /** Incremental BFS while it is still computing (frame-split), else null
+   *  once a result has been moved into `dirs`. */
+  search: PathSearchState | null;
+  /** Remaining walk directions; the first entry is the next step. Empty
+   *  with done=false means a search is computing (or the goal was
+   *  unreachable and the blocked-retry wait is running). */
+  dirs: Dir4[];
+  /** Consecutive boundary ticks the next planned step has been blocked
+   *  (or the goal stayed unreachable). */
+  blockedTicks: number;
+  /** True once the final internal step has been committed and the char is
+   *  interpolating to the goal: the landing tick applies the approach
+   *  arrival-facing and advances the route pc. Distinguishes an exhausted
+   *  plan from a dirs=[] unreachable plan that is waiting to replan. */
+  done: boolean;
+  /** When set, this is an approach step: on arrival the character faces
+   *  the live target; the stand tile is the target cell offset by side. */
+  approach: {
+    target: "player" | { event: string };
+    /** Resolved side (Dir4) to stand on; authored Dir is converted once. */
+    side: Dir4;
+    distance: number;
+  } | null;
+}
+
 export type MotionType = "static" | "random" | "approach";
 
 export interface RouteRun {
@@ -70,6 +120,14 @@ export interface RouteRun {
   waiter: string | null;
   /** MOTION_HZ reference ticks left of an in-route wait step. */
   waitLeft: number;
+  /** Expansion state for the current pathTo/approach step; null on
+   *  ordinary steps and between route steps. Not part of the save snapshot
+   *  (routes are per-visit transient state). */
+  plan: PathPlan | null;
+  /** Remaining full BFS replans for the current path step. This lives on
+   *  the route, not PathPlan, because replanning deliberately discards and
+   *  rebuilds the plan. Null outside a path step. */
+  pathRetriesLeft: number | null;
 }
 
 export interface CharState {
@@ -109,7 +167,19 @@ export function createChars(rng = 0x5151_5151): CharsState {
 }
 
 function cloneRoute(route: RouteRun | null): RouteRun | null {
-  return route ? { ...route, steps: [...route.steps] } : null;
+  if (!route) return null;
+  return {
+    ...route,
+    steps: [...route.steps],
+    plan: route.plan
+      ? {
+          ...route.plan,
+          dirs: [...route.plan.dirs],
+          search: clonePathSearch(route.plan.search),
+          approach: route.plan.approach ? { ...route.plan.approach } : null,
+        }
+      : null,
+  };
 }
 
 /** Clone mutable character state while retaining prototype-safe id tables. */
@@ -225,6 +295,8 @@ function makePatrol(route: MoveRoute | undefined): RouteRun | null {
     patrol: true,
     waiter: null,
     waitLeft: 0,
+    plan: null,
+    pathRetriesLeft: null,
   };
 }
 
@@ -283,6 +355,8 @@ export function installRoute(
       patrol: false,
       waiter,
       waitLeft: 0,
+      plan: null,
+      pathRetriesLeft: null,
     };
     ch.phase = 0;
     ch.moving = false;
@@ -370,6 +444,8 @@ function releaseRoute(ch: CharState, finishedWaiters: string[]): void {
   if (ch.route?.patrol) {
     ch.route.pc = 0;
     ch.route.waitLeft = 0;
+    ch.route.plan = null;
+    ch.route.pathRetriesLeft = null;
   } else if (ch.patrol) {
     // The forced route ended (landed, skipped, or was aborted via a page
     // switch elsewhere): restore the page patrol fresh from this cell.
@@ -418,9 +494,22 @@ export function stepChars(
       ch.py = ch.ty * cfg.tile;
       ch.phase = 0;
       ch.moving = false;
-      // A non-repeating route ends exactly on the landing tick, so a
-      // waiting fiber resumes as soon as the NPC reaches the last tile.
-      if (ch.route && ch.route.pc >= ch.route.steps.length && !ch.route.repeat) {
+      // A pathTo/approach step whose final internal step just
+      // landed finishes on THIS tick — apply the approach arrival-facing
+      // and advance the route pc (releasing a waiting fiber immediately).
+      if (ch.route?.plan?.done) {
+        const ap = ch.route.plan.approach;
+        if (ap) {
+          const tc = resolveTargetCell(ap.target, player, others);
+          if (tc) {
+            const f = facingToward(ch.tx, ch.ty, tc.x, tc.y);
+            if (f !== null) { ch.facing = f; ch.stepDir = f; }
+          }
+        }
+        advanceRouteStep(ch, finishedWaiters);
+      } else if (ch.route && ch.route.pc >= ch.route.steps.length && !ch.route.repeat) {
+        // A non-repeating route ends exactly on the landing tick, so a
+        // waiting fiber resumes as soon as the NPC reaches the last tile.
         releaseRoute(ch, finishedWaiters);
       }
       continue;
@@ -451,6 +540,197 @@ export function stepChars(
   return { state: s, finishedWaiters };
 }
 
+/** Advance one authored route step, clearing any path plan. Handles the
+ *  repeat wrap / non-repeat finish exactly as the instant branches did. */
+function advanceRouteStep(ch: CharState, finishedWaiters: string[]): void {
+  const route = ch.route!;
+  route.plan = null;
+  route.pathRetriesLeft = null;
+  route.pc++;
+  if (route.pc >= route.steps.length && !route.repeat) releaseRoute(ch, finishedWaiters);
+  else if (route.pc >= route.steps.length) route.pc = 0;
+}
+
+/** Resolve a turn/path target character to its live cell, or null. */
+function resolveTargetCell(
+  target: "player" | { event: string },
+  player: PlayerPlace,
+  others: ReadonlyMap<string, CharState>,
+): { x: number; y: number } | null {
+  if (target === "player") return { x: player.tx, y: player.ty };
+  const o = others.get(target.event);
+  return o ? { x: o.tx, y: o.ty } : null;
+}
+
+/** Occupancy the BFS must route around is built in stepPath from the live
+ *  player/others, so it always reflects stepping-into cells. */
+
+/** Resolve the approach target to a goal stand tile + approach record, or
+ *  signal "finish now" (already on the stand cell / standing on target) /
+ *  "no target" (end the route). */
+function resolveApproach(
+  ch: CharState,
+  step: Extract<MoveStep, { approach: unknown }>,
+  player: PlayerPlace,
+  others: ReadonlyMap<string, CharState>,
+): { kind: "goal"; x: number; y: number; approach: PathPlan["approach"] }
+  | { kind: "finish"; turn: Dir4 | null }
+  | { kind: "noTarget" } {
+  const target = step.approach.target;
+  const tc = resolveTargetCell(target, player, others);
+  if (!tc) return { kind: "noTarget" };
+  let side: Dir4;
+  if (step.approach.side) {
+    side = DIR4[step.approach.side];
+  } else {
+    const resolved = approachSide(ch.tx, ch.ty, tc.x, tc.y);
+    if (resolved === null) {
+      // Standing on the target: turn toward it (Tuxemon already-there
+      // branch) and finish the step.
+      return { kind: "finish", turn: facingToward(ch.tx, ch.ty, tc.x, tc.y) };
+    }
+    side = resolved;
+  }
+  const distance = step.approach.distance ?? 1;
+  const stand = approachStand(tc.x, tc.y, side, distance);
+  return { kind: "goal", x: stand.x, y: stand.y, approach: { target, side, distance } };
+}
+
+/** Expand the pathTo/approach plan for the boundary tick and, when the
+ *  first planned tile step is open, commit it. The BFS itself is split
+ *  across reference ticks (advancePathSearch, BFS_CELLS_PER_TICK per tick)
+ *  so many concurrent pathfinders stay inside the per-frame compute
+ *  budget; the path is identical to a synchronous search. */
+function stepPath(
+  ch: CharState,
+  table: PassageTable,
+  player: PlayerPlace,
+  others: ReadonlyMap<string, CharState>,
+  cfg: MovementConfig,
+  step: Extract<MoveStep, { pathTo: unknown }> | Extract<MoveStep, { approach: unknown }>,
+  finishedWaiters: string[],
+): void {
+  const route = ch.route!;
+  const W = table.width;
+
+  // First encounter, or a full replan after being blocked: resolve the goal
+  // and START a (frame-split) BFS. Bodies are baked into the search mask at
+  // this instant; a later-cleared waypoint is caught by the walk-time
+  // occupant check and triggers a recompute.
+  if (route.plan === null) {
+    let gx: number;
+    let gy: number;
+    let approach: PathPlan["approach"] = null;
+    if (route.pathRetriesLeft === null) {
+      route.pathRetriesLeft =
+        ("pathTo" in step ? step.pathTo.retries : step.approach.retries) ?? DEFAULT_PATH_RETRIES;
+    }
+    if ("pathTo" in step) {
+      gx = step.pathTo.x;
+      gy = step.pathTo.y;
+    } else {
+      const resolved = resolveApproach(ch, step, player, others);
+      if (resolved.kind === "noTarget") { releaseRoute(ch, finishedWaiters); return; }
+      if (resolved.kind === "finish") {
+        if (resolved.turn !== null) { ch.facing = resolved.turn; ch.stepDir = resolved.turn; }
+        advanceRouteStep(ch, finishedWaiters);
+        return;
+      }
+      gx = resolved.x;
+      gy = resolved.y;
+      approach = resolved.approach;
+    }
+
+    const blocked = new Set<number>();
+    blocked.add(player.tx + player.ty * W);
+    blocked.add(player.destX + player.destY * W);
+    for (const [id, o] of others) {
+      if (id === ch.id) continue;
+      blocked.add(o.tx + o.ty * W);
+      if (o.moving) blocked.add(o.tx + DX[o.stepDir] + (o.ty + DY[o.stepDir]) * W);
+    }
+    const search = createPathSearch(table, ch.tx, ch.ty, gx, gy, blocked);
+    if (search === null) {
+      releaseRoute(ch, finishedWaiters);
+      return;
+    }
+    route.plan = {
+      search, dirs: [], blockedTicks: 0, done: false, approach,
+    };
+  }
+
+  const plan = route.plan!;
+
+  // Drive the frame-split BFS one slice per boundary tick until it finishes.
+  if (plan.search) {
+    const res = advancePathSearch(plan.search, table, BFS_CELLS_PER_TICK);
+    if (!res.done) return; // still computing; no walk this tick
+    plan.search = null;
+    if (res.path === null) {
+      // Unreachable right now: fall into the blocked-retry wait below.
+      plan.dirs = [];
+      plan.blockedTicks = 1;
+    } else if (res.path.length === 0) {
+      // Goal is the current cell: an approach finishes with a turn; a bare
+      // pathTo simply completes.
+      if (plan.approach) {
+        const tc = resolveTargetCell(plan.approach.target, player, others);
+        if (tc) {
+          const f = facingToward(ch.tx, ch.ty, tc.x, tc.y);
+          if (f !== null) { ch.facing = f; ch.stepDir = f; }
+        }
+      }
+      advanceRouteStep(ch, finishedWaiters);
+      return;
+    } else {
+      plan.dirs = res.path;
+      plan.blockedTicks = 0;
+    }
+  }
+
+  if (plan.done) return; // the landing tick advances the pc (moving branch)
+  const dir = plan.dirs[0];
+  if (dir === undefined) {
+    // Goal unreachable / next step blocked: wait a replan interval, then
+    // recompute from the live cell against live bodies.
+    plan.blockedTicks++;
+    if (plan.blockedTicks < PATH_REPLAN_TICKS) return;
+    if (route.pathRetriesLeft! <= 0) {
+      // The way never cleared: Tuxemon stops the blocking action here.
+      releaseRoute(ch, finishedWaiters);
+      return;
+    }
+    route.pathRetriesLeft = route.pathRetriesLeft! - 1;
+    route.plan = null; // re-expand (new BFS) next boundary tick
+    return;
+  }
+  const tx = ch.tx + DX[dir];
+  const ty = ch.ty + DY[dir];
+  if (occupantBlocks(ch, tx, ty, dir, table, player, others)) {
+    ch.facing = dir;
+    ch.stepDir = dir;
+    plan.blockedTicks++;
+    if (plan.blockedTicks < PATH_REPLAN_TICKS) return; // wait, keep the plan
+    if (route.pathRetriesLeft! <= 0) {
+      releaseRoute(ch, finishedWaiters);
+      return;
+    }
+    route.pathRetriesLeft = route.pathRetriesLeft! - 1;
+    route.plan = null; // recompute against live bodies next boundary tick
+    return;
+  }
+  // Commit the next planned tile step; the SAME authored route step stays
+  // current until the whole plan is consumed.
+  commitStep(ch, dir, cfg);
+  plan.dirs.shift();
+  if (plan.dirs.length === 0) {
+    // Last internal step is now interpolating; the landing boundary tick
+    // sees plan.done, applies the approach arrival-facing and advances pc.
+    plan.done = true;
+    plan.blockedTicks = 0;
+  }
+}
+
 /** Consume exactly ONE route command on this boundary tick (MV advances
  *  its move list at most once per stop tick). */
 function stepRoute(
@@ -466,6 +746,39 @@ function stepRoute(
   const step: MoveStep | undefined = route.steps[route.pc];
   if (step === undefined) {
     releaseRoute(ch, finishedWaiters);
+    return;
+  }
+
+  // Path steps carry expansion state across boundary ticks.
+  if (typeof step === "object") {
+    if ("pathTo" in step || "approach" in step) {
+      // The final internal step lands in the moving branch (plan.done);
+      // here we only expand/walk the plan at a boundary.
+      stepPath(ch, table, player, others, cfg, step, finishedWaiters);
+      return;
+    }
+    if ("turnToward" in step) {
+      const tc = resolveTargetCell(
+        step.turnToward === "player" ? "player" : step.turnToward,
+        player,
+        others,
+      );
+      if (tc) {
+        const f = facingToward(ch.tx, ch.ty, tc.x, tc.y);
+        if (f !== null) { ch.facing = f; ch.stepDir = f; }
+      }
+      advanceRouteStep(ch, finishedWaiters);
+      return;
+    }
+    // Unknown object step: skip defensively.
+    advanceRouteStep(ch, finishedWaiters);
+    return;
+  }
+
+  if (step === "turnTowardPlayer") {
+    const f = facingToward(ch.tx, ch.ty, player.tx, player.ty);
+    if (f !== null) { ch.facing = f; ch.stepDir = f; }
+    advanceRouteStep(ch, finishedWaiters);
     return;
   }
 

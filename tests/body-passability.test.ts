@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { playerBlockedBy, type CharState, type CharsState } from "../src/engine/chars.ts";
 import {
-  BLOCK,
+  buildPassage,
   canEnter,
   canStepFrom,
   isStandable,
@@ -12,14 +12,14 @@ import { tableWithBodies } from "../src/engine/session.ts";
 import type { Sheet, TileId } from "../src/engine/types.ts";
 
 function legacyTableWithBodies(base: PassageTable, chars: CharsState): PassageTable {
-  const overrides = new Int8Array(base.overrides);
+  const solid = new Uint8Array(base.solid);
   const blocked = playerBlockedBy(chars);
-  for (let i = 0; i < overrides.length; i++) {
-    if (overrides[i] !== BLOCK && blocked(i % base.width, Math.floor(i / base.width))) {
-      overrides[i] = BLOCK;
+  for (let i = 0; i < solid.length; i++) {
+    if (solid[i] === 0 && blocked(i % base.width, Math.floor(i / base.width))) {
+      solid[i] = 1;
     }
   }
-  return { ...base, bodyBlocks: undefined, overrides };
+  return { ...base, bodyBlocks: undefined, solid };
 }
 
 function rng(seed: number): () => number {
@@ -94,13 +94,18 @@ describe("session character occupancy", () => {
         overrides[i] = [-1, 0, 0, 0, 1][next() % 5]!;
         ground.push(tiles[next() % tiles.length]!);
       }
-      const base: PassageTable = {
-        width,
-        height,
-        overrides,
-        ground,
-        sheets: new Map([[open.id, open], [wall.id, wall]]),
-      };
+      const base: PassageTable = buildPassage(
+        {
+          id: "eq", name: "eq", width, height, sheets: [open.id, wall.id],
+          ground,
+          passage: overrides.reduce<[number, "pass" | "block"][]>((acc, v, i) => {
+            if (v === 1) acc.push([i, "pass"]);
+            else if (v === -1) acc.push([i, "block"]);
+            return acc;
+          }, []),
+        },
+        new Map([[open.id, open], [wall.id, wall]]),
+      );
       const chars: CharsState = { rng: next(), chars: Object.create(null) as Record<string, CharState> };
       const charCount = between(next, 0, 40);
       for (let i = 0; i < charCount; i++) {

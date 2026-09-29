@@ -229,7 +229,9 @@ examples' `ATTRIBUTION.md` files.
 ## The format in one screen
 
 A project document (`"format": "rpgkit-project/v1"`) names a `start` tile,
-tile `sheets`, `items`, and `maps`. A map has a dense row-major `ground`
+tile `sheets`, `items`, and `maps`. Sheets may define symmetric `dirBlock`
+edges and independent one-sided `dirEdges.enter` / `dirEdges.exit` masks. A
+map has a dense row-major `ground`
 array of `"sheet.cell"` tile ids (`null` is a blocking void), a sparse
 `upper` star layer drawn above characters, sparse `passage` overrides, and
 `events`. Each event owns ordered **pages**; the active page is the
@@ -249,7 +251,7 @@ command list. `src/data/schema.json` is normative and
 | `selfSwitch` | set the event-local A/B/C/D flag |
 | `if` | condition over switch/variable/selfSwitch/item/gold/facing, with `else` |
 | `transfer` | swap maps at x/y/dir, with an optional fade |
-| `moveRoute` | force the player or this event through a step list |
+| `moveRoute` | route the player, this event, or a named event through moves, turns, waits, deterministic `pathTo`, and `approach` |
 | `wait` | virtual-time pause (seconds, compiled against `simulationHz`) |
 | `gold` | add/sub gold |
 | `item` | add/remove an item count |
