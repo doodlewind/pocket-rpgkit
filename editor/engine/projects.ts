@@ -42,6 +42,7 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
     "tileSize": { "type": "integer", "enum": [16] },
     "start": { "$ref": "#/$defs/transferTarget" },
     "initialGold": { "type": "integer", "minimum": 0 },
+    "playerName": { "type": "string", "minLength": 1, "maxLength": 24, "description": "Default name substituted for the {name} text token in a new playthrough." },
     "sheets": {
       "type": "array",
       "minItems": 1,
@@ -144,6 +145,18 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
             },
             "frames": { "type": "integer", "minimum": 1, "maximum": 8 },
             "step": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Virtual frames each walk frame is held." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sheet"],
+          "properties": {
+            "kind": { "const": "walker" },
+            "sheet": { "type": "string", "description": "Source PNG grid sliced at build time into deterministic static facing/pose frames." },
+            "h": { "type": "integer", "enum": [16, 32], "description": "Frame height in pixels; defaults to 32. Width is always 16." },
+            "cols": { "type": "integer", "minimum": 3, "maximum": 32, "description": "Source sheet columns; defaults to 3." },
+            "rows": { "type": "integer", "minimum": 4, "maximum": 32, "description": "Source sheet rows; defaults to 4." }
           }
         }
       ]

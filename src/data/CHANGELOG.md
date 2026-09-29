@@ -79,5 +79,15 @@ fields and commands are optional and the v1 spellings keep their meaning.
   keep running. The lock is per map visit (a transfer clears it) and its
   held state is preserved by a save.
 
+## v1 amendment — 2026-09-29 (player name, tall walkers)
+
+- `playerName` optionally supplies the fresh-session value substituted for
+  `{name}` in text and choice prompts. The value lives in save state after
+  startup.
+- A `walker` sprite may name a source `sheet` with optional `h`, `cols` and
+  `rows`. The default is a 3-column by 4-row sheet of 16×32 frames; the asset
+  cooker slices it into idle/left-step/right-step images for four facings.
+  The original per-direction `atlases` walker declaration remains valid.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

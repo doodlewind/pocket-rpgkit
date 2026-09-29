@@ -204,6 +204,26 @@ describe("the example project conforms to data/schema.json", () => {
     delete noStart.start;
     expect(validateSchema(schema, noStart).length).toBeGreaterThan(0);
   });
+
+  test("accepts source-sheet walkers without invalidating legacy atlas walkers", async () => {
+    const schema = await Bun.file(new URL("../src/data/schema.json", import.meta.url)).json();
+    const sourceSheet = structuredClone(buildMiniProject()) as Project;
+    sourceSheet.sprites = {
+      hero: { kind: "walker", sheet: "assets/hero.png", h: 32, cols: 3, rows: 4 },
+    };
+    expect(validateSchema(schema, sourceSheet)).toEqual([]);
+
+    const legacy = structuredClone(buildMiniProject()) as Project;
+    legacy.sprites = {
+      hero: {
+        kind: "walker",
+        atlases: { down: "d.png", left: "l.png", right: "r.png", up: "u.png" },
+        frames: 3,
+        step: 8,
+      },
+    };
+    expect(validateSchema(schema, legacy)).toEqual([]);
+  });
 });
 
 // --- host-portable snapshot clone (desktop QuickJS has no structuredClone) -

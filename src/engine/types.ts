@@ -179,12 +179,48 @@ export interface CommonEvent {
   commands: Command[];
 }
 
-/** Page.sprite resolves through this map; v1 ships static 16x16 image
- *  characters only (the player walker is authored separately). */
-export interface SpriteDef {
+/** A static character painted from one baked image (16x16). Page.sprite
+ *  resolves through the image map. */
+export interface ImageSpriteDef {
   kind: "image";
   src: string;
 }
+
+/** A grid walker sheet the asset cooker slices into twelve static frames
+ *  (four facings x idle/step-L/step-R). Defaults describe the Tuxemon
+ *  character sheet: 3 columns (walk-L, idle, walk-R) x 4 rows
+ *  (down, left, right, up) of 16x32 cells; see tools/lib/bake.ts
+ *  TUXEMON_WALKER_LAYOUT for the engine facing-row remap. The runtime draws
+ *  the frame chosen from the saved CharState facing + mover phase, never a
+ *  host auto-play clock, so saves stay deterministic. */
+export interface WalkerSheetSpriteDef {
+  kind: "walker";
+  /** Source walker sheet PNG. */
+  sheet: string;
+  /** Frame height in px: 32 (default) for a 16x32 sheet whose top row
+   *  overflows upward, or 16 for a square sheet. */
+  h?: 16 | 32;
+  /** Sheet columns (default 3: walk-L, idle, walk-R). */
+  cols?: number;
+  /** Sheet rows (default 4: down, left, right, up). */
+  rows?: number;
+}
+
+/** Legacy v1 walker declaration retained for documents that already point
+ *  at one animated atlas per direction. New importers should prefer a
+ *  WalkerSheetSpriteDef and cook deterministic static frames. */
+export interface WalkerAtlasSpriteDef {
+  kind: "walker";
+  atlases: { down: string; left: string; right: string; up: string };
+  frames: number;
+  step: number;
+}
+
+export type WalkerSpriteDef = WalkerSheetSpriteDef | WalkerAtlasSpriteDef;
+
+/** Page.sprite resolves through this map: a static image or a walker sheet
+ *  the cooker slices into per-facing/pose frames. */
+export type SpriteDef = ImageSpriteDef | WalkerSpriteDef;
 
 export interface Project {
   format: "rpgkit-project/v1";
