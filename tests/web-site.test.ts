@@ -52,7 +52,7 @@ describe("games", () => {
 
   test("cards follow the metadata table, then the rest in build order", () => {
     // "later" stands for an example with no web.json entry yet.
-    expect(cardOrder(["meadow", "sunstone", "later", "grow", "wander"], config)).toEqual(["sunstone", "grow", "wander", "meadow", "later"]);
+    expect(cardOrder(["meadow", "sunstone", "later", "grow", "wander"], config)).toEqual(["wander", "sunstone", "grow", "meadow", "later"]);
     expect(cardOrder(["later", "meadow"], config)).toEqual(["meadow", "later"]);
   });
 
@@ -119,19 +119,41 @@ describe("pages", () => {
     expect(urls(html)).toContain("site.css");
   });
 
-  test("showcase entries are linked, not hosted, and validated", () => {
-    const entry = { title: "Pocket Tuxemon", url: "https://example.org/tuxemon/", description: "A & B" };
-    const html = renderLanding({ ...site, showcase: [entry] }, [{ game: games[0]! }]);
-    expect(html).toContain('<section class="showcase">');
+  test("showcase entries are cards linked to their own site, listed first", () => {
+    const entry = {
+      title: "Pocket Tuxemon",
+      url: "https://example.org/tuxemon/",
+      description: "A & B",
+      preview: "https://example.org/tuxemon/preview.png",
+      controls: [{ button: "CIRCLE" as const, action: "Talk" }],
+    };
+    const html = renderLanding({ ...site, showcase: [entry] }, games.map((game) => ({ game })));
+    expect(html).toContain('<article class="game-card showcase-card">');
     expect(html).toContain('<a href="https://example.org/tuxemon/">Pocket Tuxemon</a>');
+    expect(html).toContain('<a class="play" href="https://example.org/tuxemon/">Play in the browser</a>');
+    expect(html).toContain('src="https://example.org/tuxemon/preview.png"');
     expect(html).toContain("A &amp; B");
-    expect(renderLanding(site, [{ game: games[0]! }])).not.toContain('class="showcase"');
+    expect(html.indexOf("showcase-card")).toBeLessThan(html.indexOf(`id="${games[0]!.id}"`));
+    expect(renderLanding(site, [{ game: games[0]! }])).not.toContain("showcase-card");
     const parse = (value: unknown) => () => parseSiteConfig(value, "web.json");
     expect(parse({ showcase: [entry] })).not.toThrow();
     expect(parse({ showcase: {} })).toThrow(/"showcase" is a list/);
     expect(parse({ showcase: [{ title: "", url: entry.url }] })).toThrow(/needs a title/);
     expect(parse({ showcase: [{ title: "x", url: "/relative/" }] })).toThrow(/absolute https/);
     expect(parse({ showcase: [{ title: "x", url: "javascript:alert(1)" }] })).toThrow(/absolute https/);
+    expect(parse({ showcase: [{ title: "x", url: entry.url, preview: "preview.png" }] })).toThrow(/preview must be/);
+    expect(parse({ showcase: [{ title: "x", url: entry.url, controls: [{ button: "NOPE", action: "x" }] }] })).toThrow(/known button/);
+  });
+
+  test("the site lists the showcase first and Wander before the other examples", () => {
+    const html = renderLanding(
+      { ...site, showcase: config.showcase },
+      cardOrder([...EXAMPLES], config).map((id) => ({ game: resolveGame(KIT_ROOT, config, id) })),
+    );
+    const order = [...html.matchAll(/<h2><a href="[^"]*">([^<]+)<\/a><\/h2>/g)].map((m) => m[1]);
+    expect(order[0]).toBe("Pocket Tuxemon");
+    expect(order[1]).toBe("Wander: an Endless Grown World");
+    expect(order.length).toBe(1 + EXAMPLES.length);
   });
 
   test("a card without a preview gets a placeholder, not a broken image", () => {

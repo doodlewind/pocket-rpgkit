@@ -301,10 +301,11 @@ async function main(): Promise<void> {
     // ---- landing ----
     phase = "landing";
     await navigate(rootBase);
-    await waitFor("previews", `[...document.images].length > 0 && [...document.images].every((i) => i.complete)`);
+    await waitFor("previews", `[...document.querySelectorAll(".game-card:not(.showcase-card) img")].every((i) => i.complete)`);
     const landing = await evaluate<{ cards: string[]; previews: number[]; links: string[] }>(`({
-      cards: [...document.querySelectorAll(".game-card h2")].map((h) => h.textContent),
-      previews: [...document.images].map((i) => i.naturalWidth),
+      // Showcase cards link projects hosted elsewhere; only this site's games count.
+      cards: [...document.querySelectorAll(".game-card:not(.showcase-card) h2")].map((h) => h.textContent),
+      previews: [...document.querySelectorAll(".game-card:not(.showcase-card) img")].map((i) => i.naturalWidth),
       links: [...document.querySelectorAll("a[href]")].map((a) => a.getAttribute("href")),
     })`);
     const games = (await Bun.file(join(SITE, "games.json")).json()) as { id: string; title: string; viewport: { policy: string } }[];
@@ -528,7 +529,7 @@ async function main(): Promise<void> {
     phase = "subpath";
     const before = requests.length;
     await navigate(subBase);
-    await waitFor("subpath previews", `[...document.images].length > 0 && [...document.images].every((i) => i.complete && i.naturalWidth > 0)`);
+    await waitFor("subpath previews", `[...document.querySelectorAll(".game-card:not(.showcase-card) img")].every((i) => i.complete && i.naturalWidth > 0)`);
     for (const game of games) {
       await openGame(subBase, game.id);
       const f0 = await frames();

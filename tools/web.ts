@@ -114,6 +114,10 @@ export interface ShowcaseEntry {
   /** An absolute https:// URL of the project's own page. */
   url: string;
   description?: string;
+  /** An absolute https:// URL of a 480x272 preview on the project's own site
+   *  (hotlinked, so no third-party art is copied into this repository). */
+  preview?: string;
+  controls?: WebControl[];
 }
 
 /** Controls of the kit's GameView, for games the table does not describe. */
@@ -189,6 +193,10 @@ export function parseSiteConfig(value: unknown, source: string): WebSiteConfig {
       if (entry.description !== undefined && typeof entry.description !== "string") {
         throw new Error(`web: ${source}: showcase[${i}].description is text`);
       }
+      if (entry.preview !== undefined && (typeof entry.preview !== "string" || !/^https:\/\/[^\s"<>]+$/.test(entry.preview))) {
+        throw new Error(`web: ${source}: showcase[${i}].preview must be an absolute https:// URL`);
+      }
+      validateEntry(`showcase-${i}`, { controls: entry.controls }, source);
     });
   }
   return config;
@@ -427,6 +435,7 @@ export interface Card {
 
 /** The landing page at the site root. */
 export function renderLanding(site: SiteInfo, cards: readonly Card[]): string {
+  const showcase = (site.showcase ?? []).map(showcaseCard);
   const articles = cards.map(({ game, preview }) => {
     const href = `${game.id}/`;
     const shot = preview
@@ -453,9 +462,9 @@ export function renderLanding(site: SiteInfo, cards: readonly Card[]): string {
     ...(site.source ? [`<p class="links"><a href="${escapeHtml(site.source)}">Source code</a></p>`] : []),
     "</header>",
     '<main class="games">',
+    ...showcase,
     ...articles,
     "</main>",
-    ...showcaseSection(site.showcase),
     '<footer class="site-footer">',
     '<p>Runs on <a href="https://github.com/pocket-stack/pocketjs">PocketJS</a>, compiled to WebAssembly. ' +
       "Nothing to install; a keyboard works best. Art credits are on each game's page.</p>",
@@ -466,21 +475,24 @@ export function renderLanding(site: SiteInfo, cards: readonly Card[]): string {
   ].join("\n");
 }
 
-/** Projects on their own sites, linked (not hosted) from the landing page. */
-function showcaseSection(entries: readonly ShowcaseEntry[] | undefined): string[] {
-  if (!entries || entries.length === 0) return [];
+/** A project on its own site, as a card like the examples' (listed first).
+ *  Its link and preview point at that site; nothing is built or hosted here. */
+function showcaseCard(entry: ShowcaseEntry): string {
+  const href = escapeHtml(entry.url);
+  const shot = entry.preview
+    ? `<img src="${escapeHtml(entry.preview)}" width="480" height="272" alt="" loading="lazy">`
+    : `<span class="no-preview">${escapeHtml(entry.title)}</span>`;
   return [
-    '<section class="showcase">',
-    "<h2>Made with Pocket RPG Kit</h2>",
-    "<ul>",
-    ...entries.map((entry) =>
-      `<li><a href="${escapeHtml(entry.url)}">${escapeHtml(entry.title)}</a>` +
-      (entry.description ? ` <span class="description">${escapeHtml(entry.description)}</span>` : "") +
-      "</li>"
-    ),
-    "</ul>",
-    "</section>",
-  ];
+    '<article class="game-card showcase-card">',
+    `<a class="shot" href="${href}" tabindex="-1" aria-hidden="true">${shot}</a>`,
+    '<div class="card-body">',
+    `<h2><a href="${href}">${escapeHtml(entry.title)}</a></h2>`,
+    ...(entry.description ? [`<p class="description">${escapeHtml(entry.description)}</p>`] : []),
+    ...(entry.controls && entry.controls.length > 0 ? [controlsTable(entry.controls)] : []),
+    `<p><a class="play" href="${href}">Play in the browser</a> <span class="elsewhere">on its own site</span></p>`,
+    "</div>",
+    "</article>",
+  ].join("\n");
 }
 
 /** One game's player page, <site>/<id>/index.html. */
