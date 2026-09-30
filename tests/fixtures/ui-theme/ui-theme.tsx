@@ -10,7 +10,7 @@ import { createOsk } from "@pocketjs/framework/osk";
 import type { Modal } from "../../../src/engine/interpreter.ts";
 import type { MenuState } from "../../../src/engine/save-menu.ts";
 import { DialogBox, SaveMenu, type UiTheme } from "../../../src/ui/index.ts";
-import { CODE, FACES, MENUS, MODALS, SAVE_TITLE, SLOTS, THEMES, type FixtureScene } from "./scenes.ts";
+import { CODE, FACES, ITEMS, MENUS, MODALS, SAVE_TITLE, SLOTS, THEMES, type FixtureScene } from "./scenes.ts";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -22,6 +22,7 @@ function Fixture() {
   const [menu, setMenu] = createSignal<MenuState>(MENUS.closed);
   const [theme, setTheme] = createSignal<Partial<UiTheme> | undefined>(undefined);
   const [faces, setFaces] = createSignal<Record<string, string> | undefined>(undefined);
+  const [items, setItems] = createSignal<Record<string, { name: string }> | undefined>(undefined);
   const [title, setTitle] = createSignal<string | undefined>(undefined);
   const [code, setCode] = createSignal("");
   const legend = () => (modal()?.kind === "choices" ? "ok  back" : "next");
@@ -34,6 +35,7 @@ function Fixture() {
         setMenu(MENUS[scene.menu ?? "closed"]);
         setTheme(THEMES[scene.theme ?? "default"]);
         setFaces(scene.faces ? FACES : undefined);
+        setItems(scene.items ? ITEMS : undefined);
         setTitle(scene.title ? SAVE_TITLE : undefined);
         setCode(CODE);
       });
@@ -42,7 +44,7 @@ function Fixture() {
 
   return (
     <View class="w-full h-full overflow-hidden bg-black">
-      <DialogBox modal={modal} legend={legend} theme={theme()} faces={faces()} />
+      <DialogBox modal={modal} legend={legend} theme={theme()} faces={faces()} items={items()} />
       <SaveMenu
         menu={menu}
         hasFs={true}

@@ -5,7 +5,7 @@ built on [PocketJS](https://github.com/pocket-stack/pocketjs). It contains
 the parts an RPG-Maker-style game needs without any specific game:
 
 - **pure-TS engine** (`src/engine/`) — tile movement and collision, the
-  event interpreter (pages, triggers, 20 commands), map-character motion,
+  event interpreter (pages, triggers, 21 commands), map-character motion,
   multi-map sessions, deterministic extension state and battle scenes,
   deterministic save snapshots. No host imports, no
   wall clock, no `Math.random`: a session is one pure fold per virtual
@@ -303,14 +303,14 @@ repositories must give `acquire` the same synchronous validated contract as
 resident map synchronously readable: attract-mode rollback can reacquire an
 earlier resident map within the same host frame.
 
-### The 20 commands
+### The 21 commands
 
 | op | purpose |
 | --- | --- |
 | `text` | typewriter dialog lines |
-| `choices` | prompt with option branches and an optional cancel branch |
+| `choices` | prompt with 2-8 option branches (a scrolling box past 4) and an optional cancel branch |
 | `switch` | set a global switch |
-| `variable` | set/add/sub or a seeded random range |
+| `variable` | set/add/sub, a seeded random range, or arithmetic against another variable (copy/add/sub/mul/div/mod) |
 | `selfSwitch` | set the event-local A/B/C/D flag |
 | `if` | condition over switch/variable/selfSwitch/item/gold/facing or a registered `ext` predicate, with `else` |
 | `transfer` | swap maps at x/y/dir, with an optional fade; map/x/y/dir may be `{ "variable": "id" }` |
@@ -324,8 +324,22 @@ earlier resident map within the same host frame.
 | `common` | run a common event's command list |
 | `lockInput` / `unlockInput` | cross-event input lock; freezes the mover and action but not autorun/parallel |
 | `place` | relocate `"this"` or a named event to a tile, optionally facing a direction |
+| `shop` | MV-style buy/sell over gold and item counts, from an `id`-namespaced goods list with per-good price/sellPrice/stock/condition overrides |
 | `ext` | call a namespaced, game-registered pure command with JSON arguments |
 | `battle` | park the event in a game-registered battle scene, then run its optional win/lose/escape branch |
+
+`choices` options and `shop` goods share one 4-row scrolling box (`ui/list-window.ts`
+picks the window from the live cursor; a label past 24 characters truncates with
+an ellipsis). A shop sells any owned item at floor(the item's own `price` / 2)
+unless a goods entry for it overrides that shop's `sellPrice`, and refuses a
+purchase past `system.inventory.maxPerItem` (default 99) or `maxKinds` (default
+unlimited). A goods entry's `stock` is a finite quantity that shop carries,
+persisted per shop `id` + item id: a buy decrements it and a sell-back at that
+same shop increments it; a `condition` (the page-condition clause shape) hides
+the row while it does not hold. An item's effective sell price of 0, or its own
+`sellable:false`, makes it unsellable everywhere; `shop.sellList` controls
+whether such a row still lists dimmed (`"disable"`, default, MV parity) or is
+omitted (`"hide"`, Tuxemon parity).
 
 Triggers: `action` (confirm on the faced or occupied tile),
 `playerTouch` (on cell entry), `autorun` (blocking, restarts after it

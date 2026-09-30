@@ -25,7 +25,7 @@
 
 import type { MovementState } from "./movement.ts";
 import type { InterpState } from "./interpreter.ts";
-import { cloneInterp, isBusy } from "./interpreter.ts";
+import { cloneInterp, createSwitchState, isBusy } from "./interpreter.ts";
 import { deepClone, keyedRecord } from "./clone.ts";
 import { assertJsonValue, encodeExtension } from "./extensions.ts";
 import { envelopeConsistent, validateSnapshot } from "./save-validate.ts";
@@ -122,6 +122,11 @@ export function createSessionSnapshot(
 /** Drop between-frame transient fields. The battle queue is persistent at
  * runtime, but can only be empty at the safe point checked above. */
 function normalizeInterp(snap: SaveSnapshot): SaveSnapshot {
+  // The per-frame cloneInterp copies the numeric banks verbatim (so an
+  // ill-typed content value still reaches its fatal check). The save
+  // boundary re-normalizes them through createSwitchState, so a state that
+  // passes canSave always encodes into an envelope the decoder accepts.
+  snap.interp.sw = createSwitchState(snap.interp.sw);
   snap.interp.cues = [];
   snap.interp.pendingTransfer = null;
   snap.interp.pendingMoveRoutes = [];

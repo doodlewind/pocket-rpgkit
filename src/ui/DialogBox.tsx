@@ -41,7 +41,8 @@
 
 import { createMemo, For, Show, type Accessor } from "solid-js";
 import { Image, Text, View } from "@pocketjs/framework/components";
-import type { Modal } from "../engine/interpreter.ts";
+import type { Modal, ShopRow } from "../engine/interpreter.ts";
+import { truncateLabel, windowStart } from "./list-window.ts";
 import { Panel } from "./Panel.tsx";
 import { resolveUiTheme, speakerLabel, splitSpeaker, type SpeakerSplit, type UiTheme } from "./theme.ts";
 
@@ -66,6 +67,9 @@ export interface DialogBoxProps {
    *  64 px image and an 8 px gap). Art drawn smaller inside its 64x64
    *  canvas can narrow it. */
   faceWidth?: number;
+  /** Shop box item display names: id -> name. An id absent from the table
+   *  (or the prop itself omitted) renders its raw id. */
+  items?: Readonly<Record<string, { name: string }>>;
 }
 
 /** Slice the joined "line\nline" text to `revealed` chars; lines whose turn
@@ -83,11 +87,21 @@ function visibleLines(lines: string[], revealed: number): string[] {
 
 const TEXT_ROWS = [0, 1, 2, 3];
 const CHOICE_ROWS = [0, 1, 2, 3];
+/** Rows visible at once in the choices/shop box (T2-9: up to 8 choice
+ *  options and an unbounded shop goods list scroll a 4-row window; the
+ *  box's fixed pixel height never grows). */
+const VISIBLE_ROWS = 4;
+/** Choice/shop row content budget after the 2-char "> "/"  " cursor
+ *  prefix: the box fit maxLength:24 authored text before T2-9 raised the
+ *  schema cap to 32/unbounded item names, so a longer label truncates
+ *  instead of overflowing the 248px panel. */
+const ROW_LABEL_MAX = 24;
 const NO_SPEAKER: SpeakerSplit = { name: null, rest: "", cut: 0 };
 
 export function DialogBox(props: DialogBoxProps) {
   const theme = createMemo(() => resolveUiTheme(props.theme));
   const isChoice = () => props.modal()?.kind === "choices";
+  const isShop = () => props.modal()?.kind === "shop";
   // Re-evaluated per typed character; downstream only sees a new speaker.
   const speaker = createMemo(
     () => {
@@ -161,9 +175,18 @@ export function DialogBox(props: DialogBoxProps) {
             <For each={CHOICE_ROWS}>
               {(row) => {
                 const m = () => props.modal() as Extract<Modal, { kind: "choices" }> | null;
-                const exists = () => m()?.kind === "choices" && row < m()!.options.length;
-                const selected = () => exists() && m()!.index === row;
-                const label = () => (exists() ? `${selected() ? "> " : "  "}${m()!.options[row]}` : "");
+                const total = () => m()?.options.length ?? 0;
+                // A pure function of the live cursor index: never desyncs
+                // from the reducer, and wrap-around (top<->bottom) recomputes
+                // the correct window with no leftover scroll state.
+                const start = () => windowStart(m()?.index ?? 0, total(), VISIBLE_ROWS);
+                const optIndex = () => start() + row;
+                const exists = () => m()?.kind === "choices" && optIndex() < total();
+                const selected = () => exists() && m()!.index === optIndex();
+                const label = () =>
+                  exists()
+                    ? `${selected() ? "> " : "  "}${truncateLabel(m()!.options[optIndex()]!, ROW_LABEL_MAX)}`
+                    : "";
                 return (
                   <Text
                     class="text-xs"
@@ -183,9 +206,95 @@ export function DialogBox(props: DialogBoxProps) {
           </Panel>
         </Show>
 
+        {/* Shop box: same footprint and docking as the choices box, with a
+            stage/gold header row instead of a prompt and a scrolling row
+            list (T2-10). Buy rows a player cannot afford, has capped out
+            (backpack cap) or that are out of stock (B1) render dimmed;
+            sell rows for an unsellable item (B4) do too. Every dimmed row
+            stays navigable, just unconfirmable. */}
+        <Show when={isShop()}>
+          <Panel
+            theme={theme()}
+            style={{ posType: 1, width: 248, height: 96, insetR: 12, insetB: 98 }}
+            paperClass="flex-col p-[6]"
+            debugName="rpgkit-shop-box"
+          >
+            <View class="flex-row justify-between" style={{ height: 14 }}>
+              <Text class="text-xs" style={{ textColor: theme().dim, lineHeight: 14, height: 14 }} debugName="rpgkit-shop-stage">
+                {`${(() => {
+                  const m = props.modal();
+                  return m?.kind === "shop" ? (m.stage === "buy" ? "Buy" : "Sell") : "";
+                })()}`}
+              </Text>
+              <Text class="text-xs" style={{ textColor: theme().dim, lineHeight: 14, height: 14 }} debugName="rpgkit-shop-gold">
+                {`${(() => {
+                  const m = props.modal();
+                  return m?.kind === "shop" ? `Gold: ${m.gold}` : "";
+                })()}`}
+              </Text>
+            </View>
+            <View class="flex-col" style={{ height: 4 }} />
+            <For each={CHOICE_ROWS}>
+              {(row) => {
+                const m = () => props.modal() as Extract<Modal, { kind: "shop" }> | null;
+                const total = () => m()?.rows.length ?? 0;
+                const start = () => windowStart(m()?.index ?? 0, total(), VISIBLE_ROWS);
+                const rowIndex = () => start() + row;
+                const exists = () => m()?.kind === "shop" && rowIndex() < total();
+                const shopRow = (): ShopRow | null => (exists() ? m()!.rows[rowIndex()]! : null);
+                const selected = () => exists() && m()!.index === rowIndex();
+                // Buy: unaffordable, capped, or out-of-stock rows are inert
+                // (T2-10 backpack cap / B1 finite stock). Sell: an
+                // unsellable row (B4 — sellList:"disable") stays listed but
+                // cannot be confirmed.
+                const disabled = () => {
+                  const r = shopRow();
+                  if (!r || r.kind !== "item") return false;
+                  return m()!.stage === "buy" ? !r.canAfford || r.atCap : !r.sellable;
+                };
+                const leftLabel = () => {
+                  const r = shopRow();
+                  const prefix = selected() ? "> " : "  ";
+                  if (!r) return "";
+                  if (r.kind === "item") {
+                    const name = props.items?.[r.item]?.name ?? r.item;
+                    return `${prefix}${truncateLabel(name, ROW_LABEL_MAX)}`;
+                  }
+                  return `${prefix}${r.kind === "sell" ? "Sell" : r.kind === "leave" ? "Leave" : "Back"}`;
+                };
+                const rightLabel = () => {
+                  const r = shopRow();
+                  if (r?.kind !== "item") return "";
+                  // Finite shop stock (B1) shows next to the price; unlimited
+                  // goods (stock: null, and every sell-stage row) show price
+                  // alone.
+                  const stockSuffix = r.stock !== null ? ` (${r.stock})` : "";
+                  return `${r.price}g${stockSuffix}`;
+                };
+                const rowColor = () => (disabled() ? theme().dim : selected() ? theme().accent : theme().ink);
+                return (
+                  <View class="flex-row justify-between" style={{ height: 14 }} debugName={`rpgkit-shop-row-${row}`}>
+                    <Text class="text-xs" style={{ textColor: rowColor(), lineHeight: 14, height: 14 }}>
+                      {`${leftLabel()}`}
+                    </Text>
+                    <Text class="text-xs" style={{ textColor: rowColor(), lineHeight: 14, height: 14 }}>
+                      {`${rightLabel()}`}
+                    </Text>
+                  </View>
+                );
+              }}
+            </For>
+            <View class="flex-row justify-end" style={{ height: 14, insetT: 4 }}>
+              <Text class="text-xs" style={{ textColor: theme().dim, lineHeight: 12, height: 12 }} debugName="rpgkit-shop-legend">
+                {`${props.legend()}`}
+              </Text>
+            </View>
+          </Panel>
+        </Show>
+
         {/* Message box: framed panel, four fixed text rows + legend, and
             the portrait column when the game passes faces. */}
-        <Show when={!isChoice()}>
+        <Show when={!isChoice() && !isShop()}>
           <Panel
             theme={theme()}
             style={{ posType: 1, height: 92, insetL: 8, insetR: 8, insetB: 8 }}

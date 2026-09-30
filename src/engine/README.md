@@ -21,9 +21,9 @@ state.
   `approach` move steps (fixed neighbour order, respects all edge guards
   and bodies; the search is sliced across reference ticks to bound QuickJS
   frame cost).
-- `interpreter.ts` — event pages, triggers, the 20-command interpreter
-  (the v1 15 plus `lockInput` / `unlockInput` / `place` / `ext` / `battle`), the typewriter
-  clock, the seeded RNG, saveable switch state.
+- `interpreter.ts` — event pages, triggers, the 21-command interpreter
+  (the v1 15 plus `lockInput` / `unlockInput` / `place` / `shop` / `ext` /
+  `battle`), the typewriter clock, the seeded RNG, saveable switch state.
 - `extensions.ts` — namespaced pure command/condition handlers, the opaque
   JSON extension slot, validation and save codecs.
 - `battle.ts` — game-owned battle reducer and scene contracts.
@@ -131,6 +131,32 @@ Conventions:
   drain it after every step (it is cleared at the top of the next one).
 - All switch/variable/item/gold values and the mulberry32 RNG cursor live
   in `state.sw`, a plain JSON-serializable object: the P1⑤ save snapshot.
+- **Invariant: every write into `state.sw`'s numeric banks (`gold`,
+  `items`, `shopStock`, `variables`, and the project's `initialGold` seed)
+  goes through `clampFiniteVar`.** JSON Schema's `integer` only rejects a
+  fractional part, so an authored value like `1e308` (a legal double with
+  none) passes schema validation while landing far outside a safe integer;
+  unclamped arithmetic on it (a shop sale, `gold add`, `1e308 * 1e308`, …)
+  can overflow to `Infinity`, which `JSON.stringify` turns into `null` and
+  the save loader then refuses to read back. Any future numeric write
+  into `state.sw` — battle rewards, an `ext` command's bank, anything else
+  that must survive a save round-trip — must clamp through the same
+  function instead of writing raw arithmetic. This covers every entry
+  point, not just authored commands: `createSwitchState`'s public
+  constructor normalizes a hand-built bank the same way, and both
+  `createInterpState` (fresh session) and `save-restore.ts`'s
+  `restoreSessionSnapshot` (loaded save) route through it; an extension
+  command's `result.writes` and a `BattleCompletion.writes` numeric entry
+  clamp on their way into `state.sw.variables` too. `cloneInterp` itself
+  stays a plain field copy — it also runs on every live step, where a
+  content-error check (e.g. `resolveTransfer`'s non-integer coordinate
+  guard) must still see an out-of-range value a bug introduced mid-frame,
+  not have it silently floored away first. `save-validate.ts` backs the
+  restore path up structurally: a decoded envelope whose
+  `gold`/`items`/`shopStock`/numeric `variables` entries are not
+  `Number.isSafeInteger` is refused with a typed `SaveError` before
+  `restoreSessionSnapshot` ever runs, so a hand-crafted file cannot
+  reintroduce a value normal play can no longer produce.
 
 ## P1④ session (multi-map) fold
 

@@ -131,6 +131,34 @@ export interface VariableRandom {
   min: number;
   max: number;
 }
+/** T2-16: the operand is another variable's live value instead of a
+ *  literal. "copy" assigns it outright; the arithmetic ops combine the
+ *  target's current value with the source's (target OP source). Division
+ *  and modulo by a source that reads 0 leave the variable unchanged rather
+ *  than producing NaN/Infinity, keeping the saved bank plain finite JSON
+ *  numbers. */
+export interface VariableOpRef {
+  op: "copy" | "add" | "sub" | "mul" | "div" | "mod";
+  from: string;
+}
+
+/** T2-10/B1: one row of a shop's goods list. `price` overrides the item's
+ *  own catalog price for buying at THIS shop only, falling back to it when
+ *  omitted. `sellPrice` overrides this shop's buy-back price for the item
+ *  (independent of any other shop's `sellPrice` for the same item);
+ *  omitted falls back to floor(item.price / 2) as before. `stock` is a
+ *  finite quantity this shop carries: a purchase decrements it and a
+ *  sell-back at this same shop increments it (persisted per shop `id` +
+ *  item id); omitted means unlimited. `condition` reuses the page-
+ *  condition clause shape (K1's `all`/flat fields): the row is hidden
+ *  while it does not hold. */
+export interface ShopGood {
+  item: string;
+  price?: number;
+  sellPrice?: number;
+  stock?: number;
+  condition?: PageCondition;
+}
 
 export type Command =
   | { op: "text"; lines: string[]; cps?: number }
@@ -141,7 +169,7 @@ export type Command =
       cancel?: { commands: Command[] };
     }
   | { op: "switch"; id: string; value: boolean }
-  | { op: "variable"; id: string; set: VariableSet | VariableRandom }
+  | { op: "variable"; id: string; set: VariableSet | VariableRandom | VariableOpRef }
   | { op: "selfSwitch"; key: "A" | "B" | "C" | "D"; value: boolean }
   | { op: "if"; if: Condition; then: Command[]; else?: Command[] }
   | {
@@ -160,6 +188,16 @@ export type Command =
   | { op: "erase" }
   | { op: "exit" }
   | { op: "common"; id: string }
+  /** T2-10 shop: a goods list plus buy/sell. `id` namespaces this shop's
+   *  persisted stock counters (SessionState.sw.shopStock) so two shops
+   *  selling the same item track independent inventories; it must be
+   *  stable across saves (like an event id). `sell` (default true) is
+   *  MV's "purchase only" flag inverted: false hides the sell tab
+   *  entirely. `sellList` governs how an unsellable row (ShopGood or the
+   *  Item itself, see ShopGood/Item) appears in the sell tab: "disable"
+   *  (default, MV parity) lists it dimmed and unconfirmable; "hide"
+   *  (Tuxemon parity, only resellable items) omits it. */
+  | { op: "shop"; id: string; goods: ShopGood[]; sell?: boolean; sellList?: "disable" | "hide" }
   /** Cross-event input lock. While the lock is held the mover
    *  ignores the d-pad and action presses cannot start an event; autorun
    *  and parallel fibers keep folding. MV lock_controls/unlock_controls. */
@@ -249,6 +287,18 @@ export interface Item {
   name: string;
   sprite: string;
   usable?: boolean;
+  /** T2-10: the item's own shop price. A shop's `goods` entry may override
+   *  it per-shop for buying, and override its own sellPrice per-shop for
+   *  selling; a shop with no such override sells this item at
+   *  floor(price / 2). */
+  price?: number;
+  /** T2-10/B4: whether this item can be sold for gold at all. Absent
+   *  defaults to true whenever its effective sell price (a shop's
+   *  ShopGood.sellPrice override, else floor(price/2)) is > 0; an item
+   *  whose effective sell price is 0 is never sellable regardless of this
+   *  flag. An unsellable row still lists in the sell tab (disabled) unless
+   *  the shop's `sellList` is "hide". */
+  sellable?: boolean;
 }
 
 export interface CommonEvent {
@@ -312,6 +362,16 @@ export interface ProjectSystem {
    *  input). autorun and parallel pages keep running. Default false: v1
    *  holds the player only for a blocking fiber or a choices box. */
   messageBlocksPlayer?: boolean;
+  /** Engine-level backpack tunables (T2-10/B1). */
+  inventory?: {
+    /** Max count of a single item id the backpack holds; default 99
+     *  (SHOP_ITEM_CAP). A buy that would exceed it is refused. */
+    maxPerItem?: number;
+    /** Max number of DISTINCT item ids the backpack holds; absent means
+     *  unlimited. A buy that would introduce a new kind past this cap is
+     *  refused even with room under maxPerItem/gold. */
+    maxKinds?: number;
+  };
 }
 
 export interface Project {

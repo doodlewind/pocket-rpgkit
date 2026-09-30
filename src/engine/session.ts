@@ -35,6 +35,7 @@ import { deepClone, keyedRecord } from "./clone.ts";
 
 import {
   activePage,
+  clampFiniteVar,
   cloneInterp,
   continueBattle,
   continueExternal,
@@ -206,8 +207,9 @@ export interface Session {
   preparingMap: SessionMapPreparation | null;
   sheets: ReadonlyMap<string, Sheet>;
   commonEvents: CommonEvent[];
-  /** Project.system options and the extension registry every compiled
-   * world (eager, on demand or staged) is built with. */
+  /** Project.system options, the item catalog/inventory caps (T2-10/B1)
+   * and the extension registry every compiled world (eager, on demand or
+   * staged) is built with. */
   worldOptions: WorldOptions;
   /** Function registry/codec lives outside reducer state. */
   extensions: ExtensionRuntime;
@@ -435,6 +437,8 @@ export function createSession(
   const worldOptions: WorldOptions = {
     messageBlocksPlayer: project.system?.messageBlocksPlayer === true,
     extensions,
+    items: project.items,
+    inventory: project.system?.inventory,
   };
   assertRegisteredExtensions(extensions, commonExtensionCalls(commonEvents));
   assertBattleRegistered(options.battle ?? null, commonEvents.some((event) => commandsUseBattle(event.commands)));
@@ -535,7 +539,7 @@ export function startSession(
   // switch/item/variable banks begin empty) and the configurable default
   // player name (substituted for the {name} text token).
   const interp = createInterpState();
-  interp.sw.gold = project.initialGold ?? 0;
+  interp.sw.gold = clampFiniteVar(project.initialGold ?? 0);
   if (project.playerName) interp.sw.playerName = project.playerName;
   return {
     frame: 0,
@@ -805,7 +809,12 @@ function advanceBattleScene(
   const transfer = completionTransfer(completion.transfer);
 
   s.ext = nextExt;
-  for (const [id, value] of writes) s.interp.sw.variables[id] = value;
+  // B1 (fix 3): a battle completion's numeric write shares
+  // the interpreter's finite-safe-integer normalizer, same as an ext
+  // command's writes and every authored variable/gold/item command.
+  for (const [id, value] of writes) {
+    s.interp.sw.variables[id] = typeof value === "number" ? clampFiniteVar(value) : value;
+  }
   for (const [id, value] of switches) s.interp.sw.switches[id] = value;
   if (scene.pausedTicks > 0) {
     const shift = (fiber: SessionState["interp"]["main"]): void => {
@@ -969,9 +978,9 @@ function stepReferenceTick(
   const world = sess.worlds.get(s.mapId)!;
   const prevFacing = s.move.facing;
   const busy = isBusy(s.interp);
-  const choicesOpen = s.interp.modal?.kind === "choices";
+  const capturesDpad = s.interp.modal?.kind === "choices" || s.interp.modal?.kind === "shop";
   const held = messageHoldsPlayer(world, s.interp);
-  if (!busy && !choicesOpen && !held && s.playerRoute === null && !s.interp.inputLocked) {
+  if (!busy && !capturesDpad && !held && s.playerRoute === null && !s.interp.inputLocked) {
     const table = tableWithBodies(sess.tables.get(s.mapId)!, s.chars);
     Object.assign(s.move, stepMovement(s.move, input.buttons, table, sess.cfg));
   }

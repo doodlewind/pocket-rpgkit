@@ -50,7 +50,16 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
       "additionalProperties": false,
       "description": "Project-wide runtime options. Every field is optional; an absent field keeps the v1 behavior.",
       "properties": {
-        "messageBlocksPlayer": { "type": "boolean", "description": "While any fiber's text or choices box is open (a parallel page's included), the player cannot move and no action or playerTouch page starts; autorun and parallel pages keep running. Default false." }
+        "messageBlocksPlayer": { "type": "boolean", "description": "While any fiber's text or choices box is open (a parallel page's included), the player cannot move and no action or playerTouch page starts; autorun and parallel pages keep running. Default false." },
+        "inventory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxPerItem": { "type": "integer", "minimum": 1, "maximum": 999999, "description": "Max count of a single item id the backpack holds; default 99." },
+            "maxKinds": { "type": "integer", "minimum": 1, "maximum": 999999, "description": "Max number of distinct item ids the backpack holds; absent means unlimited." }
+          },
+          "description": "T2-10/B1 engine-level backpack tunables."
+        }
       }
     },
     "initialGold": { "type": "integer", "minimum": 0 },
@@ -211,7 +220,9 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
         "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 24 },
         "sprite": { "$ref": "#/$defs/tileId" },
-        "usable": { "type": "boolean" }
+        "usable": { "type": "boolean" },
+        "price": { "type": "integer", "minimum": 0, "description": "Shop price. A shop's goods entry may override it for buying, and override its own sellPrice for selling; a shop with no such override sells at floor(price/2)." },
+        "sellable": { "type": "boolean", "description": "Whether this item can be sold for gold at all. Absent defaults to true whenever its effective sell price is > 0; an effective sell price of 0 is never sellable regardless of this flag." }
       }
     },
     "actor": {
@@ -374,13 +385,14 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
             "options": {
               "type": "array",
               "minItems": 2,
-              "maxItems": 4,
+              "maxItems": 8,
+              "description": "T2-9: up to 8 options; the box scrolls a 4-row window once there are more than 4.",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["text", "commands"],
                 "properties": {
-                  "text": { "type": "string", "minLength": 1, "maxLength": 24 },
+                  "text": { "type": "string", "minLength": 1, "maxLength": 64 },
                   "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } }
                 }
               }
@@ -415,7 +427,10 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
                 { "type": "object", "additionalProperties": false, "required": ["op", "value"],
                   "properties": { "op": { "enum": ["set", "add", "sub"] }, "value": { "type": "integer" } } },
                 { "type": "object", "additionalProperties": false, "required": ["op", "min", "max"],
-                  "properties": { "op": { "const": "random" }, "min": { "type": "integer" }, "max": { "type": "integer" } } }
+                  "properties": { "op": { "const": "random" }, "min": { "type": "integer" }, "max": { "type": "integer" } } },
+                { "type": "object", "additionalProperties": false, "required": ["op", "from"],
+                  "description": "T2-16: the operand is another variable's live value (target OP source); div/mod by a source reading 0 leave the variable unchanged.",
+                  "properties": { "op": { "enum": ["copy", "add", "sub", "mul", "div", "mod"] }, "from": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" } } }
               ]
             }
           }
@@ -565,6 +580,34 @@ export const PROJECT_SCHEMA: Record<string, unknown> = {
             "op": { "const": "common" },
             "id": { "type": "string" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "id", "goods"],
+          "properties": {
+            "op": { "const": "shop" },
+            "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Namespaces this shop's persisted stock counters; must be stable across saves." },
+            "goods": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["item"],
+                "properties": {
+                  "item": { "type": "string" },
+                  "price": { "type": "integer", "minimum": 0, "description": "Overrides the item's own catalog price for buying at this shop only." },
+                  "sellPrice": { "type": "integer", "minimum": 0, "description": "Overrides this shop's buy-back price for the item; absent falls back to floor(item.price/2)." },
+                  "stock": { "type": "integer", "minimum": 0, "description": "Finite units this shop carries; a buy decrements it and a sell-back at this shop increments it. Absent means unlimited." },
+                  "condition": { "$ref": "#/$defs/pageCondition", "description": "Reuses the page-condition clause shape: the row is hidden while it does not hold." }
+                }
+              }
+            },
+            "sell": { "type": "boolean", "description": "Default true. False hides the sell tab (MV 'purchase only')." },
+            "sellList": { "enum": ["disable", "hide"], "description": "Default 'disable': an unsellable item lists dimmed and unconfirmable (MV parity). 'hide' omits it (Tuxemon parity)." }
+          },
+          "description": "T2-10 MV Shop Processing: buy from `goods` and (unless sell:false) sell any owned item, over gold and item counts."
         },
         {
           "type": "object",

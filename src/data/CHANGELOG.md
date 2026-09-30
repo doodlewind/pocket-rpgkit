@@ -122,6 +122,58 @@ fields and commands are optional and the v1 spellings keep their meaning.
   The UI pauses and retries the same input frame after preparation, so network
   timing cannot alter the simulation timeline.
 
+## v1 amendment — 2026-09-29 (K4: shop, scrolling choices, variable arithmetic)
+
+Three optional, backwards-compatible additions from Scout S1 §5–6
+(T2-9, T2-10, T2-16). Every existing v1 document stays valid.
+
+- **Shop (T2-10, extended for B1):** a new `shop` command
+  (`{ op: "shop", id, goods: ShopGood[], sell?, sellList? }`, MV Shop
+  Processing). `id` namespaces this shop's persisted stock counters and
+  must be stable across saves. `goods` is the buy list; each entry is
+  `{ item, price?, sellPrice?, stock?, condition? }`: `price` overrides
+  the item's own catalog price for buying at this shop only (falling
+  back to it when omitted); `sellPrice` overrides this shop's buy-back
+  price for the item (falling back to floor(item.price / 2)); `stock` is
+  a finite quantity this shop carries — a buy decrements it and a
+  sell-back at this same shop increments it, persisted per shop `id` +
+  item id — omitted means unlimited; `condition` reuses the
+  page-condition clause shape (switch/selfSwitch/variable/item/`all`)
+  and hides the row while it does not hold. `sell` (default true) shows
+  a sell tab for the player's whole inventory. `sellList` (default
+  `"disable"`) governs an unsellable row (Item.sellable:false, or an
+  effective sell price of 0): `"disable"` lists it dimmed and
+  unconfirmable (MV parity); `"hide"` omits it (Tuxemon parity, only
+  resellable items). Item gains optional `price` (shop price) and
+  `sellable` (default: sellable whenever its effective sell price is >
+  0) fields. Project gains an optional `system.inventory` block:
+  `maxPerItem` (default 99, the prior fixed cap) and `maxKinds`
+  (default unlimited) bound the backpack; a purchase that would exceed
+  either, or that the player cannot afford, or that has no stock left,
+  is refused (the row stays selectable, just inert).
+- **More than 4 choices (T2-9, extended for B2):** `choices.options`
+  widens from 2-4 to 2-8 entries, and an option's `text` from 24 to 64
+  characters. The box still shows 4 rows at a time; past 4 options it
+  scrolls a window that follows the live cursor, and a label longer
+  than the box truncates with a trailing ellipsis instead of
+  overflowing it.
+- **Variable-operand arithmetic (T2-16, extended for B3):** `variable`'s
+  `set` accepts a third shape, `{ op: "copy" | "add" | "sub" | "mul" |
+  "div" | "mod", from: id }`, reading another variable's live value
+  instead of a literal (`target OP source`; `copy` assigns it
+  outright). Every variable write — this shape and the literal
+  `set`/`add`/`sub`/`random` shapes alike — lands as a finite integer
+  clamped to `[-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]`; a
+  non-integer result (a division quotient) floors toward negative
+  infinity (`-7 / 2 = -4`, matching MV's `Math.floor` and Tuxemon's
+  `//`, not the prior `Math.trunc`). Division and modulo by a source
+  that currently reads 0 leave the variable unchanged (Tuxemon's
+  `safe_floordiv` returns the left operand; MV would write a
+  non-finite result, which this format does not follow), so the saved
+  variable bank stays plain finite JSON numbers even for an
+  authoring-time value schema accepts but arithmetic would otherwise
+  overflow (`1e308 * 1e308` clamps instead of becoming `Infinity`).
+
 ## v1 amendment — 2026-09-29 (message hold, character bodies)
 
 - **Message hold (optional):** a project may carry
@@ -196,6 +248,23 @@ fields and commands are optional and the v1 spellings keep their meaning.
 - The editor's schema-backed raw JSON model validates and round-trips both
   additions without requiring a specialized form. Existing projects and
   saves retain their prior behavior and defaults.
+
+## v1 amendment — 2026-09-29 (K4 fix 3: finite-state construction/restore/ext/battle)
+
+- **Shared finite-integer normalization now covers construction and
+  restore, not just runtime writes:** `createSwitchState`'s public
+  constructor clamps `gold`/`items`/`variables`/`shopStock` through the
+  same normalizer every authored command write already used; both
+  `createInterpState` (fresh session) and `restoreSessionSnapshot` (loaded
+  save) route through it, so a hand-built initial state or a
+  checksum-valid saved bank cannot carry a value outside
+  `[-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]`. An extension
+  command's `result.writes` and a `BattleCompletion.writes` numeric entry
+  clamp the same way on their way into the live variable bank.
+  `save-validate.ts` now requires these four banks to be
+  `Number.isSafeInteger`, not merely finite, rejecting a hand-crafted
+  envelope with a typed `SaveError` instead of silently restoring an
+  out-of-range value.
 
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

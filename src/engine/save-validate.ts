@@ -20,7 +20,7 @@ import { extensionCallNameValid, jsonValueProblem } from "./extensions.ts";
 const INTEGER_OPS = new Set([
   "text", "choices", "switch", "variable", "selfSwitch", "if", "jmp",
   "wait", "gold", "item", "se", "erase", "exit", "transfer",
-  "moveRoute", "common", "lockInput", "unlockInput", "place",
+  "moveRoute", "common", "lockInput", "unlockInput", "place", "shop",
   "ext", "battle",
 ]);
 
@@ -34,6 +34,17 @@ function isNonNegInt(v: unknown): v is number {
 
 function isU32(v: unknown): v is number {
   return isNonNegInt(v) && v <= 0xffffffff;
+}
+
+/** B1 (fix 3): the four numeric SwitchState banks
+ *  (items/variables/gold/shopStock) must be SAFE integers, not merely
+ *  finite, because every runtime write and every construction/restore
+ *  entry point normalizes through interpreter.ts's clampFiniteVar, which
+ *  never produces a value outside +/-Number.MAX_SAFE_INTEGER. A save
+ *  carrying e.g. 1e308 in one of these banks cannot come from normal play;
+ *  it is a hand-crafted file this checker must refuse. */
+function isSafeInt(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v);
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -98,6 +109,38 @@ function validateCondition(v: unknown, path: string): string | null {
     default:
       return fail(`${path}.kind`, "unknown condition kind");
   }
+}
+
+// PageCondition vocabulary (engine/types.ts PageCondition), reused by a
+// compiled shop's ShopGood.condition (T2-10/B1): the goods list is
+// embedded literally in the compiled Instr, unlike a page's own
+// `condition`, which lives in the MapDef rather than a fiber stack.
+function validatePageCondition(v: unknown, path: string): string | null {
+  if (!isRecord(v)) return fail(path, "condition must be an object");
+  if (v.switch !== undefined && typeof v.switch !== "string") {
+    return fail(`${path}.switch`, "string required");
+  }
+  if (v.selfSwitch !== undefined && !["A", "B", "C", "D"].includes(v.selfSwitch as string)) {
+    return fail(`${path}.selfSwitch`, "self switch must be A..D");
+  }
+  if (v.variable !== undefined) {
+    const vv = v.variable;
+    if (
+      !isRecord(vv) || typeof vv.id !== "string" ||
+      ![">=", "<=", "==", "!="].includes(vv.op as string) || !isFiniteNumber(vv.value)
+    ) {
+      return fail(`${path}.variable`, "{id, op, value} required");
+    }
+  }
+  if (v.item !== undefined && typeof v.item !== "string") return fail(`${path}.item`, "string required");
+  if (v.all !== undefined) {
+    if (!Array.isArray(v.all) || v.all.length === 0) return fail(`${path}.all`, "non-empty array required");
+    for (let i = 0; i < v.all.length; i++) {
+      const e = validateCondition(v.all[i], `${path}.all[${i}]`);
+      if (e) return e;
+    }
+  }
+  return null;
 }
 
 const MOVE_STEPS = new Set([
@@ -234,6 +277,13 @@ function validateProg(prog: unknown, path: string): string | null {
           if (!isFiniteNumber(min) || !isFiniteNumber(max) || min > max) {
             return fail(`${here}.set`, "random needs min <= max numbers");
           }
+        } else if (typeof set.from === "string") {
+          // T2-16 variable-operand variant: shares "add"/"sub" spellings
+          // with the literal-value variant below, disambiguated by the
+          // presence of `from` rather than `value`.
+          if (!["copy", "add", "sub", "mul", "div", "mod"].includes(set.op as string)) {
+            return fail(`${here}.set.op`, "unknown variable-ref op");
+          }
         } else if (set.op === "set" || set.op === "add" || set.op === "sub") {
           if (!isFiniteNumber(set.value)) return fail(`${here}.set.value`, "number required");
         } else {
@@ -352,6 +402,38 @@ function validateProg(prog: unknown, path: string): string | null {
       case "common":
         if (needStr("id")) return fail(`${here}.id`, "string required");
         break;
+      case "shop": {
+        {
+          const e = needStr("id");
+          if (e) return e;
+        }
+        if (!Array.isArray(ins.goods) || ins.goods.length === 0) {
+          return fail(`${here}.goods`, "non-empty array required");
+        }
+        for (const g of ins.goods) {
+          if (!isRecord(g) || typeof g.item !== "string") {
+            return fail(`${here}.goods`, "each good needs an item id");
+          }
+          if (g.price !== undefined && !isFiniteNumber(g.price)) {
+            return fail(`${here}.goods`, "price must be a number when present");
+          }
+          if (g.sellPrice !== undefined && !isFiniteNumber(g.sellPrice)) {
+            return fail(`${here}.goods`, "sellPrice must be a number when present");
+          }
+          if (g.stock !== undefined && !isNonNegInt(g.stock)) {
+            return fail(`${here}.goods`, "stock must be a non-negative integer when present");
+          }
+          if (g.condition !== undefined) {
+            const e = validatePageCondition(g.condition, `${here}.goods.condition`);
+            if (e) return e;
+          }
+        }
+        if (typeof ins.sell !== "boolean") return fail(`${here}.sell`, "boolean required");
+        if (ins.sellList !== "disable" && ins.sellList !== "hide") {
+          return fail(`${here}.sellList`, "'disable' or 'hide' required");
+        }
+        break;
+      }
       case "ext": {
         if (typeof ins.call !== "string" || !extensionCallNameValid(ins.call)) {
           return fail(`${here}.call`, "namespaced extension call required");
@@ -379,7 +461,7 @@ function validateProg(prog: unknown, path: string): string | null {
   return null;
 }
 
-const FIBER_MODES = new Set(["run", "text", "choices", "wait", "external"]);
+const FIBER_MODES = new Set(["run", "text", "choices", "shop", "wait", "external"]);
 
 function validateFiber(
   v: unknown,
@@ -441,6 +523,7 @@ function validateFiber(
     }
     case "text":
     case "choices":
+    case "shop":
     case "external":
       // A safe point carries no open modal and no parked external request,
       // so a fiber suspended in one of these modes cannot be resumed: the
@@ -464,7 +547,7 @@ function validateSwitchState(v: unknown, path: string): string | null {
     const rec = v[key];
     if (!isRecord(rec)) return fail(`${path}.${key}`, "record required");
     for (const [k, val] of Object.entries(rec)) {
-      if (!isFiniteNumber(val)) return fail(`${path}.${key}.${k}`, "finite number required");
+      if (!isSafeInt(val)) return fail(`${path}.${key}.${k}`, "safe integer required");
     }
     return null;
   };
@@ -472,8 +555,8 @@ function validateSwitchState(v: unknown, path: string): string | null {
     const rec = v[key];
     if (!isRecord(rec)) return fail(`${path}.${key}`, "record required");
     for (const [k, val] of Object.entries(rec)) {
-      if (typeof val !== "string" && !isFiniteNumber(val)) {
-        return fail(`${path}.${key}.${k}`, "string or finite number required");
+      if (typeof val !== "string" && !isSafeInt(val)) {
+        return fail(`${path}.${key}.${k}`, "string or safe integer required");
       }
     }
     return null;
@@ -484,13 +567,24 @@ function validateSwitchState(v: unknown, path: string): string | null {
   if (e) return e;
   e = variableRecord("variables");
   if (e) return e;
+  // T2-10/B1: absent (an older bank without any shop stock) is allowed and
+  // defaults to empty at load, matching playerName's back-compat rule
+  // below; a present entry must be a non-negative safe integer (units
+  // remaining; B1 (fix 3) tightened this from a merely
+  // non-negative integer).
+  if (v.shopStock !== undefined) {
+    if (!isRecord(v.shopStock)) return fail(`${path}.shopStock`, "record required");
+    for (const [k, val] of Object.entries(v.shopStock)) {
+      if (!isSafeInt(val) || val < 0) return fail(`${path}.shopStock.${k}`, "non-negative safe integer required");
+    }
+  }
   if (!isRecord(v.self)) return fail(`${path}.self`, "record required");
   for (const [k, val] of Object.entries(v.self)) {
     if (val !== undefined && !["A", "B", "C", "D"].includes(val as string)) {
       return fail(`${path}.self.${k}`, "self switch must be A..D or absent");
     }
   }
-  if (!isFiniteNumber(v.gold)) return fail(`${path}.gold`, "finite number required");
+  if (!isSafeInt(v.gold)) return fail(`${path}.gold`, "safe integer required");
   if (!isU32(v.rng)) return fail(`${path}.rng`, "u32 RNG cursor required");
   // The player name is present in every snapshot a current runtime writes;
   // an older bank without it is allowed and defaults at load, but a present
@@ -551,6 +645,38 @@ function validateModal(v: unknown, path: string, liveKeys: ReadonlySet<string>):
       return fail(`${path}.index`, "choice index out of range");
     }
     if (typeof v.cancellable !== "boolean") return fail(`${path}.cancellable`, "boolean required");
+    return null;
+  }
+  if (v.kind === "shop") {
+    if (!isNonNegInt(v.gold)) return fail(`${path}.gold`, "non-negative integer required");
+    if (typeof v.sell !== "boolean") return fail(`${path}.sell`, "boolean required");
+    if (v.stage !== "buy" && v.stage !== "sell") return fail(`${path}.stage`, "'buy' or 'sell' required");
+    if (!Array.isArray(v.rows) || v.rows.length === 0) {
+      return fail(`${path}.rows`, "non-empty array required");
+    }
+    for (const row of v.rows) {
+      if (!isRecord(row)) return fail(`${path}.rows`, "row must be an object");
+      if (row.kind === "item") {
+        if (typeof row.item !== "string") return fail(`${path}.rows`, "item row requires an item id");
+        if (!isNonNegInt(row.price) || !isNonNegInt(row.owned)) {
+          return fail(`${path}.rows`, "item row requires non-negative price/owned");
+        }
+        if (typeof row.canAfford !== "boolean" || typeof row.atCap !== "boolean") {
+          return fail(`${path}.rows`, "item row requires canAfford/atCap booleans");
+        }
+        if (row.stock !== null && !isNonNegInt(row.stock)) {
+          return fail(`${path}.rows`, "item row requires stock: non-negative integer or null");
+        }
+        if (typeof row.sellable !== "boolean") {
+          return fail(`${path}.rows`, "item row requires a sellable boolean");
+        }
+      } else if (row.kind !== "sell" && row.kind !== "leave" && row.kind !== "back") {
+        return fail(`${path}.rows`, "unknown row kind");
+      }
+    }
+    if (!isNonNegInt(v.index) || v.index >= v.rows.length) {
+      return fail(`${path}.index`, "shop row index out of range");
+    }
     return null;
   }
   return fail(`${path}.kind`, "unknown modal kind");

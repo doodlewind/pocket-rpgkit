@@ -23,7 +23,7 @@ import type { MapDef } from "./types.ts";
 import { isStandable, type PassageTable } from "./passability.ts";
 import type { SaveSnapshot } from "./save.ts";
 import { SaveError, decodeEnvelopeText } from "./save.ts";
-import { cloneInterp } from "./interpreter.ts";
+import { cloneInterp, createSwitchState } from "./interpreter.ts";
 import { createChars } from "./chars.ts";
 import { decodeExtension } from "./extensions.ts";
 import {
@@ -112,6 +112,12 @@ export function restoreSessionSnapshot(
   const problem = restoreProblem(snap, map, table);
   if (problem) throw new SaveError("shape", `save cannot be restored: ${problem}`);
   const interp = cloneInterp(snap.interp);
+  // B1 (fix 3): the restore boundary normalizes through
+  // the same constructor a fresh session uses, so this entry point shares
+  // clampFiniteVar with every other numeric-bank write/construction site
+  // even though save-validate.ts already requires a decoded envelope's
+  // gold/items/shopStock/variables to be safe integers.
+  interp.sw = createSwitchState(interp.sw);
   let ext;
   try {
     ext = decodeExtension(session.extensions, snap.ext);

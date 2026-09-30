@@ -356,6 +356,12 @@ export interface GameViewProps {
 
 export function GameView(props: GameViewProps) {
   const { project, assets } = props;
+  // Shop box item display names, keyed by id (DialogBox falls back to the
+  // raw id for anything absent). Derived once from the project's own item
+  // catalog: the same source shop goods and inventory ids resolve against.
+  const itemNames: Readonly<Record<string, { name: string }>> = Object.fromEntries(
+    project.items.map((it) => [it.id, { name: it.name }]),
+  );
   if ((props.battle === undefined) !== (props.battleScene === undefined)) {
     throw new Error("GameView: battle and battleScene must be registered together");
   }
@@ -481,6 +487,12 @@ export function GameView(props: GameViewProps) {
       return {
         confirm: { label: "ok", run: fire("confirm") },
         ...(m.cancellable ? { back: { label: "back", run: fire("cancel") } } : {}),
+      };
+    }
+    if (m?.kind === "shop") {
+      return {
+        confirm: { label: "ok", run: fire("confirm") },
+        back: { label: "back", run: fire("cancel") },
       };
     }
     return { confirm: { label: m ? "next" : "talk", run: fire("confirm") } };
@@ -691,6 +703,7 @@ export function GameView(props: GameViewProps) {
             theme={props.theme}
             faces={props.faces}
             faceWidth={props.faceWidth}
+            items={itemNames}
           />
         </>
       </Show>

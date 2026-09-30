@@ -41,11 +41,14 @@ import type {
   Dir,
   Facing,
   GameEvent,
+  Item,
   JsonValue,
   MapDef,
   MoveRoute,
   Page,
+  PageCondition,
   RouteTarget,
+  ShopGood,
   TransferCoordinate,
   TransferDirection,
   TransferMap,
@@ -108,7 +111,15 @@ export interface SwitchState {
    *  models one held key per event; the sample game uses only A. */
   self: Record<string, SelfKey | undefined>;
   items: Record<string, number>;
+  /** Event variables are numeric for the built-in arithmetic commands, but
+   *  an extension may also write a string (VariableValue). */
   variables: Record<string, VariableValue>;
+  /** T2-10/B1: per-shop finite stock, key `${shopId}:${itemId}` -> units
+   *  remaining. A row without a live entry here uses its authored
+   *  ShopGood.stock starting value; a good with no authored stock never
+   *  gets an entry (unlimited). Buying decrements it; selling an item back
+   *  at a shop that lists that item (with a stock figure) increments it. */
+  shopStock: Record<string, number>;
   gold: number;
   /** The player's name, substituted for the {name} text token. Part of the
    *  save snapshot; a fresh session seeds it from Project.playerName. */
@@ -121,9 +132,16 @@ export function createSwitchState(init?: Partial<SwitchState>): SwitchState {
   return {
     switches: keyedRecord(init?.switches),
     self: keyedRecord(init?.self),
-    items: keyedRecord(init?.items),
-    variables: keyedRecord(init?.variables),
-    gold: init?.gold ?? 0,
+    // B1 (fix 3): this public constructor is also the state a
+    // fresh session and a restored save both start from (createInterpState,
+    // save-restore.ts's restoreSessionSnapshot), so every numeric bank is
+    // normalized through the same clampFiniteVar every runtime write uses —
+    // a hand-built init (or a legacy save) cannot smuggle a non-safe-integer
+    // value past construction/restore the way runtime writes already can't.
+    items: clampVarRecord(init?.items),
+    variables: clampVariableRecord(init?.variables),
+    shopStock: clampVarRecord(init?.shopStock, true),
+    gold: clampFiniteVar(init?.gold ?? 0),
     playerName: init?.playerName ?? DEFAULT_PLAYER_NAME,
     rng: init?.rng ?? 0x12345678,
   };
@@ -219,14 +237,16 @@ export function pageReadsFacing(p: Page): boolean {
   return p.condition?.all?.some((c) => c.kind === "facing") ?? false;
 }
 
-export function pageConditionHolds(
-  p: Page,
+/** Does a PageCondition hold? Shared by page selection and a shop
+ *  ShopGood.condition row gate (T2-10/B1), which reuses this exact clause
+ *  shape instead of a Tuxemon-specific mechanism. */
+export function conditionHolds(
+  c: PageCondition | undefined,
   s: SwitchState,
   eventKey: string,
   facing?: Facing,
   extension?: ExtensionScope,
 ): boolean {
-  const c = p.condition;
   if (!c) return true;
   if (c.switch !== undefined && !(keyedValue(s.switches, c.switch) ?? false)) return false;
   if (c.selfSwitch !== undefined && keyedValue(s.self, eventKey) !== c.selfSwitch) return false;
@@ -242,6 +262,16 @@ export function pageConditionHolds(
   if (c.item !== undefined && (keyedValue(s.items, c.item) ?? 0) < 1) return false;
   if (c.all && !allClausesHold(c.all, s, eventKey, facing, extension)) return false;
   return true;
+}
+
+export function pageConditionHolds(
+  p: Page,
+  s: SwitchState,
+  eventKey: string,
+  facing?: Facing,
+  extension?: ExtensionScope,
+): boolean {
+  return conditionHolds(p.condition, s, eventKey, facing, extension);
 }
 
 /** Highest-index page whose condition holds (R2 §2); null when none do.
@@ -296,7 +326,8 @@ export type Instr =
       id: string;
       set:
         | { op: "set" | "add" | "sub"; value: number }
-        | { op: "random"; min: number; max: number };
+        | { op: "random"; min: number; max: number }
+        | { op: "copy" | "add" | "sub" | "mul" | "div" | "mod"; from: string };
     }
   | { op: "selfSwitch"; key: SelfKey; value: boolean }
   | { op: "if"; cond: Condition; onFalse: number }
@@ -320,6 +351,7 @@ export type Instr =
     }
   | { op: "moveRoute"; target: RouteTarget; wait: boolean; route: MoveRoute }
   | { op: "common"; id: string }
+  | { op: "shop"; id: string; goods: readonly ShopGood[]; sell: boolean; sellList: "disable" | "hide" }
   | { op: "ext"; call: string; args: JsonValue }
   | {
       op: "battle";
@@ -424,6 +456,9 @@ export function compile(cmds: readonly Command[], hz: number = TICK_HZ): Prog {
         case "common":
           emit({ op: "common", id: c.id });
           break;
+        case "shop":
+          emit({ op: "shop", id: c.id, goods: c.goods, sell: c.sell ?? true, sellList: c.sellList ?? "disable" });
+          break;
         case "ext":
           emit({ op: "ext", call: c.call, args: deepClone(c.args) });
           break;
@@ -490,7 +525,47 @@ export interface ChoiceModal {
   cancellable: boolean;
 }
 
-export type Modal = TextModal | ChoiceModal;
+/** One row of a shop box. "item" rows sell/buy `item`; the others are
+ *  control rows with no goods behind them. In the "buy" stage rows are
+ *  goods followed by an optional "sell" row and a trailing "leave" row;
+ *  in the "sell" stage rows are the player's own sellable stock followed
+ *  by a trailing "back" row. Rebuilt fresh every step the modal is open
+ *  (live gold/stock), so modalChanged compares content, not identity. */
+export type ShopRow =
+  | {
+      kind: "item";
+      item: string;
+      price: number;
+      owned: number;
+      canAfford: boolean;
+      atCap: boolean;
+      /** Buy-stage: remaining shop stock for this good, or null when it
+       *  has no configured stock (unlimited). Always null on a sell-stage
+       *  row. Zero folds into `atCap` (out of stock also disables the
+       *  row). */
+      stock: number | null;
+      /** Sell-stage: whether the player may confirm selling this row
+       *  (B4); an unsellable row still lists (dimmed) unless the shop's
+       *  `sellList` is "hide". Always true on a buy-stage row. */
+      sellable: boolean;
+    }
+  | { kind: "sell" | "leave" | "back" };
+
+export interface ShopModal {
+  kind: "shop";
+  fiber: string;
+  gold: number;
+  sell: boolean;
+  stage: "buy" | "sell";
+  index: number;
+  rows: readonly ShopRow[];
+}
+
+export type Modal = TextModal | ChoiceModal | ShopModal;
+
+/** Backpack stack cap a shop purchase refuses to exceed (T2-10; matches the
+ *  `item` command's authored count range). */
+export const SHOP_ITEM_CAP = 99;
 
 /** Did the VISIBLE modal identity/content change between two reducer
  *  frames? The UI repaints the message layer only when this is true, so a
@@ -521,7 +596,31 @@ export function modalChanged(a: Modal | null, b: Modal | null): boolean {
       a.options.some((opt, i) => opt !== b.options[i])
     );
   }
+  if (a.kind === "shop" && b.kind === "shop") {
+    return (
+      a.gold !== b.gold ||
+      a.sell !== b.sell ||
+      a.stage !== b.stage ||
+      a.index !== b.index ||
+      a.rows.length !== b.rows.length ||
+      a.rows.some((row, i) => !shopRowEquals(row, b.rows[i]!))
+    );
+  }
   return false;
+}
+
+function shopRowEquals(a: ShopRow, b: ShopRow): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind !== "item" || b.kind !== "item") return true;
+  return (
+    a.item === b.item &&
+    a.price === b.price &&
+    a.owned === b.owned &&
+    a.canAfford === b.canAfford &&
+    a.atCap === b.atCap &&
+    a.stock === b.stock &&
+    a.sellable === b.sellable
+  );
 }
 
 export interface SoundCue {
@@ -576,7 +675,7 @@ interface Fiber {
   pageIndex: number;
   parallel: boolean;
   stack: { prog: Prog; pc: number }[];
-  mode: "run" | "text" | "choices" | "wait" | "external";
+  mode: "run" | "text" | "choices" | "shop" | "wait" | "external";
   /** Frame on which the current wait/text started. */
   since: number;
   erase: boolean;
@@ -594,6 +693,15 @@ export interface World {
   eventsById?: ReadonlyMap<string, GameEvent>;
   cellEvents?: ReadonlyMap<number, readonly GameEvent[]>;
   alwaysScanEvents?: readonly GameEvent[];
+  /** Project item catalog (id -> Item), for a shop's price fallback
+   *  (goods entries without their own `price` use the item's own) and its
+   *  sell price fallback (floor(item.price / 2) when a shop has no
+   *  ShopGood.sellPrice override for the item). */
+  items?: ReadonlyMap<string, Item>;
+  /** Resolved backpack cap tunables (T2-10/B1, Project.system.inventory).
+   *  maxPerItem defaults to SHOP_ITEM_CAP; maxKinds undefined means no cap
+   *  on distinct item ids. */
+  inventory?: { maxPerItem: number; maxKinds?: number };
   /** Project.system.messageBlocksPlayer: an open box of any fiber holds
    *  the player (messageHoldsPlayer). */
   messageBlocksPlayer?: boolean;
@@ -601,11 +709,14 @@ export interface World {
   extensions: ExtensionRuntime;
 }
 
-/** Options a World is compiled with: Project.system flags plus the
- *  session's registered extension handlers. */
+/** Options a World is compiled with: Project.system flags, the item
+ *  catalog/inventory caps a shop needs, and the session's registered
+ *  extension handlers. */
 export interface WorldOptions {
   messageBlocksPlayer?: boolean;
   extensions?: ExtensionRuntime;
+  items?: readonly Item[];
+  inventory?: { maxPerItem?: number; maxKinds?: number };
 }
 
 export interface InterpError {
@@ -718,6 +829,12 @@ export function createWorld(
       }
     }
   }
+  const items = options.items ?? [];
+  const itemsById = items.length > 0 ? new Map(items.map((it) => [it.id, it])) : undefined;
+  const resolvedInventory = {
+    maxPerItem: options.inventory?.maxPerItem ?? SHOP_ITEM_CAP,
+    maxKinds: options.inventory?.maxKinds,
+  };
   return {
     hz,
     map,
@@ -726,6 +843,8 @@ export function createWorld(
     eventsById,
     cellEvents,
     alwaysScanEvents,
+    items: itemsById,
+    inventory: resolvedInventory,
     messageBlocksPlayer: options.messageBlocksPlayer === true,
     extensions: options.extensions ?? createExtensionRuntime(),
   };
@@ -754,6 +873,7 @@ export function messageHoldsPlayer(w: World, s: InterpState): boolean {
 export function cloneModal(m: Modal | null): Modal | null {
   if (m === null) return null;
   if (m.kind === "text") return { ...m, lines: [...m.lines] };
+  if (m.kind === "shop") return { ...m, rows: m.rows.map((row) => ({ ...row })) };
   return { ...m, options: [...m.options] };
 }
 
@@ -787,11 +907,20 @@ export function cloneInterp(s0: InterpState): InterpState {
   for (const key of Object.keys(s0.parallels)) parallels[key] = cloneFiber(s0.parallels[key]!);
   const s: InterpState = {
     frame: s0.frame,
+    // Plain field-for-field copy, not createSwitchState's normalization:
+    // cloneInterp also runs on every live step (stepInterpWithExtensions),
+    // where a content-error check (e.g. resolveTransfer's non-integer
+    // coordinate guard) must still see an out-of-range value a bug
+    // introduced mid-frame instead of having it silently floored away first.
+    // The restore boundary (restoreSessionSnapshot) normalizes explicitly
+    // after calling this, since a checksum-valid envelope is otherwise
+    // already required to carry safe integers (save-validate.ts).
     sw: {
       switches: keyedRecord(s0.sw.switches),
       self: keyedRecord(s0.sw.self),
       items: keyedRecord(s0.sw.items),
       variables: keyedRecord(s0.sw.variables),
+      shopStock: keyedRecord(s0.sw.shopStock),
       gold: s0.sw.gold,
       playerName: s0.sw.playerName ?? DEFAULT_PLAYER_NAME,
       rng: s0.sw.rng,
@@ -1041,6 +1170,69 @@ type InstantInstr = Extract<
   | { op: "se" }
 >;
 
+/** T2-16/B3: the single normalizer for every numeric value that lands in
+ *  saveable state — variables, gold, item/shopStock counts, and the
+ *  project's initial gold. Every one of those writes must round-trip
+ *  through save.ts's finite-number check, so every one of them clamps
+ *  through here rather than doing raw arithmetic: a non-integer result (a
+ *  floor-division quotient) rounds down (MV's Game_Variables.setValue and
+ *  Tuxemon's `//` both floor; -7/2 = -4, not the -3 Math.trunc gives), and
+ *  anything outside the safe range clamps to its boundary instead of
+ *  drifting into Infinity/NaN: an unclamped 1e308*1e308 (or a shop selling
+ *  at an authored sellPrice: 1e308 — schema only requires "integer", not a
+ *  bounded one) overflows the double range to Infinity, which
+ *  JSON.stringify turns into null and save-validate.ts then refuses to
+ *  load. NaN cannot arise from a clamped operand under the ops below
+ *  (div/mod-by-zero leave the variable unchanged rather than computing);
+ *  the fallback is defensive. B1 (fix 3) extends this to every
+ *  construction/restore entry point — `createSwitchState` (used directly by
+ *  `createInterpState` and by save-restore.ts's `restoreSessionSnapshot`) —
+ *  via `clampVarRecord`/`clampVariableRecord`, and to the ext/battle write
+ *  points below, so a hand-built init, a restored save or an ext
+ *  command/battle completion cannot smuggle a non-safe-integer value past
+ *  those. `cloneInterp` itself stays a plain copy: it also runs on every
+ *  live step, where a content-error check must still see an out-of-range
+ *  value a bug introduced mid-frame instead of having it floored away. */
+const MAX_SAFE_VAR = Number.MAX_SAFE_INTEGER;
+export function clampFiniteVar(n: number): number {
+  if (Number.isNaN(n)) return 0;
+  const floored = Math.floor(n);
+  if (floored > MAX_SAFE_VAR) return MAX_SAFE_VAR;
+  if (floored < -MAX_SAFE_VAR) return -MAX_SAFE_VAR;
+  return floored;
+}
+
+/** clampFiniteVar over every value of a numeric bank (items/shopStock).
+ *  `nonNegative` additionally floors at 0, for shopStock's non-negative
+ *  invariant. Used by createSwitchState, which construction, restore and
+ *  the save boundary (save.ts normalizeInterp) all go through, so they
+ *  share the normalizer every runtime write uses. cloneInterp, the
+ *  per-frame copy, deliberately copies the banks verbatim. */
+function clampVarRecord(
+  src: Readonly<Record<string, number>> | undefined,
+  nonNegative = false,
+): Record<string, number> {
+  const out = keyedRecord(src);
+  for (const key of Object.keys(out)) {
+    const clamped = clampFiniteVar(out[key]!);
+    out[key] = nonNegative ? Math.max(0, clamped) : clamped;
+  }
+  return out;
+}
+
+/** Same normalization for the variables bank, which may also hold strings
+ *  (VariableValue): a string entry passes through unchanged. */
+function clampVariableRecord(
+  src: Readonly<Record<string, VariableValue>> | undefined,
+): Record<string, VariableValue> {
+  const out = keyedRecord(src);
+  for (const key of Object.keys(out)) {
+    const v = out[key]!;
+    if (typeof v === "number") out[key] = clampFiniteVar(v);
+  }
+  return out;
+}
+
 function runInstant(s: InterpState, f: Fiber, ins: InstantInstr): void {
   switch (ins.op) {
     case "switch":
@@ -1049,15 +1241,40 @@ function runInstant(s: InterpState, f: Fiber, ins: InstantInstr): void {
     case "variable": {
       if (ins.set.op === "random") {
         const r = randInt(s.sw.rng, ins.set.min, ins.set.max);
-        s.sw.variables[ins.id] = r.value;
+        s.sw.variables[ins.id] = clampFiniteVar(r.value);
         s.sw.rng = r.next;
+      } else if ("from" in ins.set) {
+        // T2-16: the operand is another variable's live value (target OP
+        // source); div/mod by a source reading 0 leave the variable
+        // unchanged (Tuxemon's safe_floordiv returns the left operand)
+        // instead of writing 0 or a non-finite result. "copy" alone may
+        // move a string source value across (VariableValue, an extension
+        // write); the arithmetic ops treat a non-number source/target as 0.
+        const op = ins.set.op;
+        if (op === "copy") {
+          const b = s.sw.variables[ins.set.from] ?? 0;
+          s.sw.variables[ins.id] = typeof b === "number" ? clampFiniteVar(b) : b;
+        } else {
+          const held = s.sw.variables[ins.id];
+          const a = typeof held === "number" ? held : 0;
+          const source = s.sw.variables[ins.set.from];
+          const b = typeof source === "number" ? source : 0;
+          s.sw.variables[ins.id] = clampFiniteVar(
+            op === "add" ? a + b
+            : op === "sub" ? a - b
+            : op === "mul" ? a * b
+            : op === "div" ? (b === 0 ? a : Math.floor(a / b))
+            : b === 0 ? a : a % b, // mod
+          );
+        }
       } else {
         const held = s.sw.variables[ins.id];
         const cur = typeof held === "number" ? held : 0;
-        s.sw.variables[ins.id] =
+        s.sw.variables[ins.id] = clampFiniteVar(
           ins.set.op === "set" ? ins.set.value
           : ins.set.op === "add" ? cur + ins.set.value
-          : cur - ins.set.value;
+          : cur - ins.set.value,
+        );
       }
       break;
     }
@@ -1065,10 +1282,12 @@ function runInstant(s: InterpState, f: Fiber, ins: InstantInstr): void {
       s.sw.self[f.key] = ins.value ? ins.key : undefined;
       break;
     case "gold":
-      s.sw.gold += ins.set === "add" ? ins.amount : -ins.amount;
+      s.sw.gold = clampFiniteVar(s.sw.gold + (ins.set === "add" ? ins.amount : -ins.amount));
       break;
     case "item":
-      s.sw.items[ins.item] = (s.sw.items[ins.item] ?? 0) + (ins.set === "add" ? ins.count : -ins.count);
+      s.sw.items[ins.item] = clampFiniteVar(
+        (s.sw.items[ins.item] ?? 0) + (ins.set === "add" ? ins.count : -ins.count),
+      );
       break;
     case "se":
       s.cues.push({ name: ins.name, volume: ins.volume, pitch: ins.pitch });
@@ -1081,6 +1300,95 @@ function finishFiber(s: InterpState, f: Fiber): void {
   if (s.modal?.fiber === f.key) s.modal = null;
   if (f.parallel) delete s.parallels[f.key];
   else if (s.main?.key === f.key) s.main = null;
+}
+
+/** goods.price overrides the shop's asking price; otherwise it falls back
+ *  to the item's own catalog price (0 when the item is absent/priceless). */
+function resolveGoodsPrice(good: ShopGood, items: World["items"]): number {
+  if (good.price !== undefined) return good.price;
+  return items?.get(good.item)?.price ?? 0;
+}
+
+/** T2-10/B1: SwitchState.shopStock key for one shop's tracking of one
+ *  item's remaining units. */
+function shopStockKey(shopId: string, item: string): string {
+  return `${shopId}:${item}`;
+}
+
+/** Live remaining stock for a goods row, or null when it has no authored
+ *  `stock` (unlimited). Falls back to the authored starting value until a
+ *  buy/sell at this shop first writes a live counter. */
+function goodsStock(good: ShopGood, shopId: string, sw: SwitchState): number | null {
+  if (good.stock === undefined) return null;
+  const live = keyedValue(sw.shopStock, shopStockKey(shopId, good.item));
+  return live !== undefined ? live : good.stock;
+}
+
+/** Number of DISTINCT item ids currently held (count > 0), for the
+ *  Project.system.inventory.maxKinds cap. */
+function kindsHeld(items: Readonly<Record<string, number>>): number {
+  let n = 0;
+  for (const id of Object.keys(items)) if ((items[id] ?? 0) > 0) n++;
+  return n;
+}
+
+/** Rows for the shop box's active stage, rebuilt fresh from live
+ *  gold/stock/backpack every step the modal is open. "buy": goods in
+ *  authored order (a ShopGood.condition that fails hides its row
+ *  entirely), then an optional "sell" row, then "leave". "sell": every
+ *  item the player holds (id order, deterministic) — an unsellable one
+ *  omitted when `sellList` is "hide", else listed with sellable:false —
+ *  then "back". Never empty: a control row is always present, so the
+ *  cursor always has something to land on. */
+function shopRows(
+  stage: "buy" | "sell",
+  ins: Extract<Instr, { op: "shop" }>,
+  w: World,
+  sw: SwitchState,
+  eventKey: string,
+): ShopRow[] {
+  if (stage === "buy") {
+    const maxPerItem = w.inventory?.maxPerItem ?? SHOP_ITEM_CAP;
+    const maxKinds = w.inventory?.maxKinds;
+    const heldKinds = maxKinds !== undefined ? kindsHeld(sw.items) : 0;
+    const rows: ShopRow[] = [];
+    for (const g of ins.goods) {
+      if (g.condition && !conditionHolds(g.condition, sw, eventKey)) continue;
+      const price = resolveGoodsPrice(g, w.items);
+      const owned = keyedValue(sw.items, g.item) ?? 0;
+      const stock = goodsStock(g, ins.id, sw);
+      const wouldExceedKinds = owned === 0 && maxKinds !== undefined && heldKinds >= maxKinds;
+      const outOfStock = stock !== null && stock <= 0;
+      rows.push({
+        kind: "item", item: g.item, price, owned,
+        canAfford: sw.gold >= price,
+        atCap: owned >= maxPerItem || wouldExceedKinds || outOfStock,
+        stock,
+        sellable: true,
+      });
+    }
+    if (ins.sell) rows.push({ kind: "sell" });
+    rows.push({ kind: "leave" });
+    return rows;
+  }
+  const goodsByItem = new Map(ins.goods.map((g) => [g.item, g] as const));
+  const rows: ShopRow[] = [];
+  for (const id of Object.keys(sw.items).sort()) {
+    const owned = sw.items[id] ?? 0;
+    if (owned <= 0) continue;
+    const item = w.items?.get(id);
+    const good = goodsByItem.get(id);
+    const base = item?.price ?? 0;
+    const price = good?.sellPrice ?? Math.floor(base / 2);
+    // B4: sellable defaults to true whenever the effective price is > 0,
+    // but an explicit Item.sellable:false always wins, and a 0 effective
+    // price is never sellable regardless of the flag.
+    const sellable = (item?.sellable ?? true) && price > 0;
+    if (!sellable && ins.sellList === "hide") continue;
+    rows.push({ kind: "item", item: id, price, owned, canAfford: true, atCap: false, stock: null, sellable });
+  }
+  rows.push({ kind: "back" });
+  return rows;
 }
 
 interface StepBudget {
@@ -1138,7 +1446,12 @@ function runExtensionCommand(
       if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
         throw new Error(`extension command ${JSON.stringify(call)} write ${JSON.stringify(id)} must be a string or finite number`);
       }
-      s.sw.variables[id] = value;
+      // B1 (fix 3): an ext command's numeric write shares
+      // the same finite-safe-integer normalizer as every other variable
+      // write, so an extension cannot smuggle a value save-validate.ts
+      // would refuse (or that overflows on the next arithmetic write) past
+      // this boundary.
+      s.sw.variables[id] = typeof value === "number" ? clampFiniteVar(value) : value;
     }
   }
 }
@@ -1276,6 +1589,76 @@ function runFiber(
       f.mode = "run";
     }
   }
+  if (f.mode === "shop") {
+    const top = f.stack[0]!;
+    const ins = top.prog[top.pc]!;
+    if (ins.op === "shop") {
+      if (s.modal && s.modal.fiber !== f.key) return; // another fiber's box
+      const prev = s.modal && s.modal.kind === "shop" ? s.modal : null;
+      let stage: "buy" | "sell" = prev?.stage ?? "buy";
+      let index = prev?.index ?? 0;
+      let rows = shopRows(stage, ins, w, s.sw, f.key);
+      if (rows.length > 0) {
+        if (input.upEdge) index = (index + rows.length - 1) % rows.length;
+        if (input.downEdge) index = (index + 1) % rows.length;
+      }
+      let leave = false;
+      const row = rows[index];
+      if (input.confirmEdge && row) {
+        if (row.kind === "item" && stage === "buy") {
+          if (row.canAfford && !row.atCap) {
+            s.sw.gold = clampFiniteVar(s.sw.gold - row.price);
+            s.sw.items[row.item] = clampFiniteVar((s.sw.items[row.item] ?? 0) + 1);
+            if (row.stock !== null) {
+              s.sw.shopStock[shopStockKey(ins.id, row.item)] = clampFiniteVar(row.stock - 1);
+            }
+          }
+        } else if (row.kind === "item" && stage === "sell") {
+          // B4: an unsellable row (dimmed, still navigable under
+          // sellList:"disable") cannot be confirmed sold.
+          if (row.sellable) {
+            s.sw.items[row.item] = clampFiniteVar(Math.max(0, row.owned - 1));
+            s.sw.gold = clampFiniteVar(s.sw.gold + row.price);
+            const good = ins.goods.find((g) => g.item === row.item && g.stock !== undefined);
+            if (good) {
+              const key = shopStockKey(ins.id, row.item);
+              const current = keyedValue(s.sw.shopStock, key) ?? good.stock!;
+              s.sw.shopStock[key] = clampFiniteVar(current + 1);
+            }
+          }
+        } else if (row.kind === "sell") {
+          stage = "sell";
+          index = 0;
+        } else if (row.kind === "leave") {
+          leave = true;
+        } else if (row.kind === "back") {
+          stage = "buy";
+          index = 0;
+        }
+      } else if (input.cancelEdge) {
+        if (stage === "sell") {
+          stage = "buy";
+          index = 0;
+        } else {
+          leave = true;
+        }
+      }
+      if (leave) {
+        s.modal = null;
+        f.mode = "run";
+        top.pc++;
+        // fall through into the run loop below: the shop closes and the
+        // fiber continues past it on the SAME frame (text/choices parity).
+      } else {
+        rows = shopRows(stage, ins, w, s.sw, f.key);
+        index = rows.length > 0 ? Math.min(index, rows.length - 1) : 0;
+        s.modal = { kind: "shop", fiber: f.key, gold: s.sw.gold, sell: ins.sell, stage, index, rows };
+        return;
+      }
+    } else {
+      f.mode = "run"; // modal slot was busy last frame; retry
+    }
+  }
 
   while (f.mode === "run") {
     if (budget.remaining-- <= 0) {
@@ -1373,6 +1756,14 @@ function runFiber(
           cancellable: ins.cancel !== null,
         };
         return;
+      case "shop": {
+        // Same single-slot rule as text/choices.
+        if (s.modal) return;
+        f.mode = "shop";
+        const rows = shopRows("buy", ins, w, s.sw, f.key);
+        s.modal = { kind: "shop", fiber: f.key, gold: s.sw.gold, sell: ins.sell, stage: "buy", index: 0, rows };
+        return;
+      }
       case "transfer": {
         const transfer = resolveTransfer(s, ins, f.key);
         if (transfer === null) return;

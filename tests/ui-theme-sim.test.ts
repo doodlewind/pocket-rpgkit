@@ -107,6 +107,11 @@ const ROWS = { y0: 182, y1: 242 }; // four 15 px text rows
 // the fourth row's line.
 const LEGEND = [420, 462, 227, 242] as const;
 const TEXT_X = { plain: 18, portrait: 90 };
+// The shop box shares the choices box's footprint (CHOICES): a header row
+// (stage label left, gold right) where the choices prompt sits, then up to
+// four 14 px rows from y 104, same as a choices box's options.
+const SHOP_HEADER = { x0: 228, x1: 460, y0: 86, y1: 100 };
+const shopRow = (row: number) => ({ x0: 228, x1: 460, y0: 104 + row * 14, y1: 118 + row * 14 });
 
 let world: SimWorld;
 let opCount = 0;
@@ -332,5 +337,129 @@ simDescribe("ui theme — built fixture on the sim host", () => {
       world.tick();
     }
     expect(opCount).toBe(0);
+  });
+
+  // --- T2-9 scrolling choices --------------------------------------------
+
+  test("more than 4 choices scroll a 4-row window that follows the live cursor", () => {
+    // choices8: 8 options, cursor at index 5 -> window [4..7] (a clamped
+    // "cursor one row from the top" window: windowStart(5, 8, 4) = 4).
+    const fb = shot({ modal: "choices8" });
+    const tree = world.getTree();
+    // Rows 0..2 of the window: options[4..6], unselected in ink.
+    for (const label of ["Scholar route", "Hermit route", "Wanderer route"]) {
+      expect(treeHasText(tree, label), label).toBe(true);
+    }
+    // Off-window options never mount.
+    for (const label of ["Mercenary route", "Diplomat route", "Smuggler route", "Pilgrim route"]) {
+      expect(treeHasText(tree, label), label).toBe(false);
+    }
+    // The selected row (window row 1, y 118..132) is accent; its 32-char
+    // label is truncated to fit the 248 px panel with an ellipsis.
+    expect(count(fb, DEFAULT_UI_THEME.accent, 228, 460, 118, 132)).toBeGreaterThan(15);
+    expect(treeHasText(tree, "A label far too long to…")).toBe(true);
+    expect(treeHasText(tree, "A label far too long to fit the choices box at all")).toBe(false);
+
+    // Cursor at the top (index 0): window [0..3], the tail options are
+    // out of view — the window follows the cursor, it is not pinned
+    // wherever it last scrolled to.
+    shot({ modal: "choices8Top" });
+    expect(treeHasText(world.getTree(), "Mercenary route")).toBe(true);
+    expect(treeHasText(world.getTree(), "Pilgrim route")).toBe(true);
+    expect(treeHasText(world.getTree(), "Wanderer route")).toBe(false);
+  });
+
+  // --- T2-10 shop ----------------------------------------------------------
+
+  test("the shop buy box shows the header, goods rows and the sell/leave control rows", () => {
+    const fb = shot({ modal: "shopBuy", items: true });
+    const tree = world.getTree();
+    expect(treeHasText(tree, "Buy")).toBe(true);
+    expect(treeHasText(tree, "Gold: 42")).toBe(true);
+    expect(count(fb, DEFAULT_UI_THEME.dim, ...([SHOP_HEADER.x0, SHOP_HEADER.x1, SHOP_HEADER.y0, SHOP_HEADER.y1] as const))).toBeGreaterThan(10);
+    // Window [0..3]: Iron Key (row0, affordable, unselected -> ink),
+    // Torch (row1, selected but unaffordable -> dim, not accent),
+    // Rope (row2, unselected but at the backpack cap -> dim),
+    // Sell (row3, a control row, never disabled -> ink). "Leave" (row4)
+    // scrolled out of the 4-row window at this cursor position.
+    expect(treeHasText(tree, "Iron Key")).toBe(true);
+    expect(treeHasText(tree, "Torch")).toBe(true);
+    expect(treeHasText(tree, "Rope")).toBe(true);
+    expect(treeHasText(tree, "Sell")).toBe(true);
+    expect(treeHasText(tree, "Leave")).toBe(false);
+    const row0 = shopRow(0);
+    expect(count(fb, DEFAULT_UI_THEME.ink, row0.x0, row0.x1, row0.y0, row0.y1)).toBeGreaterThan(5);
+    const row1 = shopRow(1);
+    expect(count(fb, DEFAULT_UI_THEME.dim, row1.x0, row1.x1, row1.y0, row1.y1)).toBeGreaterThan(5);
+    expect(count(fb, DEFAULT_UI_THEME.accent, row1.x0, row1.x1, row1.y0, row1.y1)).toBe(0);
+    const row2 = shopRow(2);
+    expect(count(fb, DEFAULT_UI_THEME.dim, row2.x0, row2.x1, row2.y0, row2.y1)).toBeGreaterThan(5);
+    const row3 = shopRow(3);
+    expect(count(fb, DEFAULT_UI_THEME.ink, row3.x0, row3.x1, row3.y0, row3.y1)).toBeGreaterThan(5);
+    expect(count(fb, DEFAULT_UI_THEME.dim, row3.x0, row3.x1, row3.y0, row3.y1)).toBe(0);
+  });
+
+  test("without an items table, shop rows fall back to the raw item id", () => {
+    shot({ modal: "shopBuy" }); // items omitted
+    expect(treeHasText(world.getTree(), "key")).toBe(true);
+    expect(treeHasText(world.getTree(), "Iron Key")).toBe(false);
+  });
+
+  test("the shop sell stage lists owned stock; the selected sellable row is accent, never dimmed", () => {
+    const fb = shot({ modal: "shopSell", items: true });
+    const tree = world.getTree();
+    expect(treeHasText(tree, "Sell")).toBe(true);
+    expect(treeHasText(tree, "Gold: 42")).toBe(true);
+    expect(treeHasText(tree, "Iron Key")).toBe(true);
+    expect(treeHasText(tree, "Rope")).toBe(true);
+    expect(treeHasText(tree, "Back")).toBe(true);
+    const row1 = shopRow(1); // Rope, index 1, selected
+    expect(count(fb, DEFAULT_UI_THEME.accent, row1.x0, row1.x1, row1.y0, row1.y1)).toBeGreaterThan(5);
+    expect(count(fb, DEFAULT_UI_THEME.dim, row1.x0, row1.x1, row1.y0, row1.y1)).toBe(0);
+  });
+
+  test("the shop box takes the theme like the choices box", () => {
+    const fb = shot({ modal: "shopBuy", items: true, theme: "parchment" });
+    expectFrame(fb, CHOICES, PARCHMENT.border, PARCHMENT.rim);
+    expect(count(fb, PARCHMENT.dim, SHOP_HEADER.x0, SHOP_HEADER.x1, SHOP_HEADER.y0, SHOP_HEADER.y1)).toBeGreaterThan(10);
+  });
+
+  test("an open shop box emits no ops on idle frames", () => {
+    shot({ modal: "shopBuy", items: true });
+    opCount = 0;
+    for (let i = 0; i < 3; i++) {
+      world.frame(0);
+      world.tick();
+    }
+    expect(opCount).toBe(0);
+  });
+
+  // --- B1 finite stock / B4 unsellable rows --------------------------------
+
+  test("a buy row with finite stock shows the remaining count beside the price", () => {
+    shot({ modal: "shopBuyStock", items: true });
+    const tree = world.getTree();
+    expect(treeHasText(tree, "Iron Key")).toBe(true);
+    expect(treeHasText(tree, "10g (3)")).toBe(true);
+  });
+
+  test("a sold-out buy row (stock:0) renders dimmed even though affordable and under the backpack cap", () => {
+    const fb = shot({ modal: "shopBuyStock", items: true });
+    const tree = world.getTree();
+    expect(treeHasText(tree, "5g (0)")).toBe(true);
+    const row1 = shopRow(1); // Torch, stock 0
+    expect(count(fb, DEFAULT_UI_THEME.dim, row1.x0, row1.x1, row1.y0, row1.y1)).toBeGreaterThan(5);
+  });
+
+  test("an unsellable row (B4) lists in the sell tab dimmed, next to a normal sellable one in ink", () => {
+    const fb = shot({ modal: "shopSellDisabled", items: true });
+    const tree = world.getTree();
+    expect(treeHasText(tree, "Iron Key")).toBe(true);
+    expect(treeHasText(tree, "Rope")).toBe(true);
+    const row0 = shopRow(0); // Iron Key, selected and sellable -> accent
+    expect(count(fb, DEFAULT_UI_THEME.accent, row0.x0, row0.x1, row0.y0, row0.y1)).toBeGreaterThan(5);
+    const row1 = shopRow(1); // Rope, unsellable -> dim even though unselected
+    expect(count(fb, DEFAULT_UI_THEME.dim, row1.x0, row1.x1, row1.y0, row1.y1)).toBeGreaterThan(5);
+    expect(count(fb, DEFAULT_UI_THEME.accent, row1.x0, row1.x1, row1.y0, row1.y1)).toBe(0);
   });
 });

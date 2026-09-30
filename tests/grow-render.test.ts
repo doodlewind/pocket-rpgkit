@@ -259,7 +259,10 @@ simDescribe("D6e grow render: measured 512x512 chunk-rebake alternative", () => 
   test("the Ninja tile bundle stays small", () => {
     const pak = statSync(appBundle("grow") + ".pak");
     // +130,816 B over D6h for the 224 stamp cells of the art pass.
-    expect(pak.size).toBe(799_248);
+    // +16 B for K4's new shop-box string literals ("Buy"/"Sell"/"Leave"/
+    // "Back"/"Gold: "), reachable through GrowView's DialogBox import and
+    // widening the baked font's glyph coverage by one codepoint.
+    expect(pak.size).toBe(799_264);
     expect(pak.size).toBeLessThan(850_000);
   });
 });

@@ -411,11 +411,14 @@ simDescribe("sunstone — render budget", () => {
     // extensions (one-sided passage, routes on any event, turn/pathTo/
     // approach, memoized passage cooking), the current-map actor plane with
     // row-sliced upper occlusion, the on-demand map repository with
-    // deterministic staged transfer loading, and the deterministic extension
-    // registries with the battle lifecycle and scene host: 407 KB. The
-    // bound keeps a few percent of headroom so an accidental bundle-in still
-    // trips it.
-    expect(jsBytes).toBeLessThan(420_000);
+    // deterministic staged transfer loading, the deterministic extension
+    // registries with the battle lifecycle and scene host, and K4 (T2-10
+    // shop command/UI, T2-9 scrolling >4-option choices, T2-16
+    // variable-operand arithmetic, and fix 3's construction/restore/ext/
+    // battle finite-state normalization): 424,830 B measured after merging
+    // main (4e5d880) into K4. The bound keeps a few percent of headroom so
+    // an accidental bundle-in still trips it.
+    expect(jsBytes).toBeLessThan(434_000);
   });
 });
 
