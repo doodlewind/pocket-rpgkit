@@ -108,5 +108,12 @@
         }
       ]
     }
-  }
+  },
+  "showcase": [
+    {
+      "title": "Pocket Tuxemon",
+      "url": "https://lfkdsk.github.io/pocketjs-Tuxemon/pocket-tuxemon/",
+      "description": "Tuxemon's world, maps, events, shops and battles imported automatically into Pocket RPG Kit (from bedroom to Route 1). Hosted on its own site; Tuxemon's art and story are GPL-3.0 / CC BY-SA."
+    }
+  ]
 }

@@ -119,6 +119,21 @@ describe("pages", () => {
     expect(urls(html)).toContain("site.css");
   });
 
+  test("showcase entries are linked, not hosted, and validated", () => {
+    const entry = { title: "Pocket Tuxemon", url: "https://example.org/tuxemon/", description: "A & B" };
+    const html = renderLanding({ ...site, showcase: [entry] }, [{ game: games[0]! }]);
+    expect(html).toContain('<section class="showcase">');
+    expect(html).toContain('<a href="https://example.org/tuxemon/">Pocket Tuxemon</a>');
+    expect(html).toContain("A &amp; B");
+    expect(renderLanding(site, [{ game: games[0]! }])).not.toContain('class="showcase"');
+    const parse = (value: unknown) => () => parseSiteConfig(value, "web.json");
+    expect(parse({ showcase: [entry] })).not.toThrow();
+    expect(parse({ showcase: {} })).toThrow(/"showcase" is a list/);
+    expect(parse({ showcase: [{ title: "", url: entry.url }] })).toThrow(/needs a title/);
+    expect(parse({ showcase: [{ title: "x", url: "/relative/" }] })).toThrow(/absolute https/);
+    expect(parse({ showcase: [{ title: "x", url: "javascript:alert(1)" }] })).toThrow(/absolute https/);
+  });
+
   test("a card without a preview gets a placeholder, not a broken image", () => {
     const html = renderLanding(site, [{ game: games[0]! }]);
     expect(html).not.toContain("preview.png");

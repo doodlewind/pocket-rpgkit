@@ -104,6 +104,16 @@ export interface WebSiteConfig {
   source?: string;
   /** The metadata table, keyed by game id. */
   games?: Record<string, WebGameEntry>;
+  /** Projects built with the kit that live on their own sites: linked from
+   *  the landing page, not built or hosted here. */
+  showcase?: ShowcaseEntry[];
+}
+
+export interface ShowcaseEntry {
+  title: string;
+  /** An absolute https:// URL of the project's own page. */
+  url: string;
+  description?: string;
 }
 
 /** Controls of the kit's GameView, for games the table does not describe. */
@@ -167,6 +177,20 @@ export function parseSiteConfig(value: unknown, source: string): WebSiteConfig {
     throw new Error(`web: ${source}: "games" is a table keyed by game id`);
   }
   for (const [id, entry] of Object.entries(config.games ?? {})) validateEntry(id, entry, source);
+  if (config.showcase !== undefined) {
+    if (!Array.isArray(config.showcase)) throw new Error(`web: ${source}: "showcase" is a list`);
+    config.showcase.forEach((entry, i) => {
+      if (!entry || typeof entry.title !== "string" || entry.title.length === 0) {
+        throw new Error(`web: ${source}: showcase[${i}] needs a title`);
+      }
+      if (typeof entry.url !== "string" || !/^https:\/\/[^\s"<>]+$/.test(entry.url)) {
+        throw new Error(`web: ${source}: showcase[${i}].url must be an absolute https:// URL`);
+      }
+      if (entry.description !== undefined && typeof entry.description !== "string") {
+        throw new Error(`web: ${source}: showcase[${i}].description is text`);
+      }
+    });
+  }
   return config;
 }
 
@@ -392,6 +416,7 @@ export interface SiteInfo {
   title: string;
   intro: string;
   source?: string;
+  showcase?: readonly ShowcaseEntry[];
 }
 
 export interface Card {
@@ -430,6 +455,7 @@ export function renderLanding(site: SiteInfo, cards: readonly Card[]): string {
     '<main class="games">',
     ...articles,
     "</main>",
+    ...showcaseSection(site.showcase),
     '<footer class="site-footer">',
     '<p>Runs on <a href="https://github.com/pocket-stack/pocketjs">PocketJS</a>, compiled to WebAssembly. ' +
       "Nothing to install; a keyboard works best. Art credits are on each game's page.</p>",
@@ -438,6 +464,23 @@ export function renderLanding(site: SiteInfo, cards: readonly Card[]): string {
     "</html>",
     "",
   ].join("\n");
+}
+
+/** Projects on their own sites, linked (not hosted) from the landing page. */
+function showcaseSection(entries: readonly ShowcaseEntry[] | undefined): string[] {
+  if (!entries || entries.length === 0) return [];
+  return [
+    '<section class="showcase">',
+    "<h2>Made with Pocket RPG Kit</h2>",
+    "<ul>",
+    ...entries.map((entry) =>
+      `<li><a href="${escapeHtml(entry.url)}">${escapeHtml(entry.title)}</a>` +
+      (entry.description ? ` <span class="description">${escapeHtml(entry.description)}</span>` : "") +
+      "</li>"
+    ),
+    "</ul>",
+    "</section>",
+  ];
 }
 
 /** One game's player page, <site>/<id>/index.html. */
@@ -528,6 +571,7 @@ export async function buildWebSite(options: BuildOptions): Promise<WebGame[]> {
       (games.length === 1 ? games[0]!.title : existsSync(packageJson) ? String(readJson(packageJson).name) : "PocketJS games"),
     intro: config.intro ?? "",
     ...(config.source ? { source: config.source } : {}),
+    ...(config.showcase ? { showcase: config.showcase } : {}),
   };
 
   // Start clean so a removed game or renamed asset cannot linger, but only
