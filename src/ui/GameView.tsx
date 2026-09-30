@@ -495,6 +495,18 @@ export function GameView(props: GameViewProps) {
         back: { label: "back", run: fire("cancel") },
       };
     }
+    // A game-owned scene (ui/GameView.tsx's BattleSceneView) reads no map
+    // modal, so without this branch a scene's cancel/escape command (a
+    // battle's "Run", a shop-in-battle back) has no way to reach the
+    // reducer's cancelEdge and a scene author is forced to read raw button
+    // bits itself (contracts/spec/spec.ts BTN.CROSS) instead of the
+    // portable confirm/cancel edges every other input path uses.
+    if (scene() !== null) {
+      return {
+        confirm: { label: "ok", run: fire("confirm") },
+        back: { label: "back", run: fire("cancel") },
+      };
+    }
     return { confirm: { label: m ? "next" : "talk", run: fire("confirm") } };
   });
 

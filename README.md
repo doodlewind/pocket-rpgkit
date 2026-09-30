@@ -466,6 +466,13 @@ mount(() => <GameView
 />);
 ```
 
+`GameView` registers both the `confirm` and `back` action intents while a
+scene is active (its `useActions` binding otherwise only wires `back` for a
+map choices/shop modal), so `BattleInput.cancelEdge` fires on CROSS the same
+portable way `confirmEdge` already did — a rules module reads
+`input.cancelEdge` for "cancel"/"escape" the same way it reads
+`input.confirmEdge`, instead of reading the raw button mask itself.
+
 Active battles and non-empty battle queues are not save points. They are
 nevertheless fully rewindable: `AttractController` accepts the same
 `extensions`, `battle`, and `scene` registrations, and reconstructs map,
@@ -493,11 +500,60 @@ box hold the player (no movement, no `action` / `playerTouch` start) while
 `autorun` and `parallel` pages keep running — RPG Maker's and Tuxemon's
 dialog behavior.
 
+### Battle UI kit (`pocket-rpgkit/ui/battle`)
+
+`BattleSceneComponent` (above) receives only `{ state, width, height }`, so
+every widget it draws from must be a pure function of that JSON and the
+resolution — no signal seeded from a clock, `Date.now()`, or a host frame
+count. `src/ui/battle/` is a small kit of such widgets for the screens a
+turn-based battle actually needs, built on the same primitives DialogBox and
+Panel already use (`ui/list-window.ts`'s scroll window, `ui/theme.ts`'s
+palette):
+
+- `effects.ts` — pure tick math with no UI-framework import: `tweenAt`
+  (a `{ from, to, startTick, duration }` window), `shakeOffsetX`,
+  `flashOpacity`, `faintPose` (sink + fade), `frameIndexAt` (a baked frame
+  strip's current frame) and `barFillWidth`. A rules module (or its own
+  small core library) computes a `Tween`/`SpriteEffect` once when a beat
+  starts and stores it in `SessionState.scene`; these functions re-derive
+  the same pixels from it at any `nowTick`.
+- `StatBar` — an HP/XP bar; its fill width is `barFillWidth(current, max,
+  width)`.
+- `CommandGrid` — the MV-style 2×2 battle command grid (Fight/Skill/Guard/Run
+  and similar), with a selected cell and per-cell disabled state.
+- `ListMenu` — a scrolling skill/item/party list sharing DialogBox's
+  fixed-row window and label truncation, with an optional description line.
+- `MessageBand` — a standalone typewriter message band (DialogBox's message
+  box without the choices/shop/portrait machinery).
+- `SpriteSlot` — one battler image whose position, horizontal shake, flash
+  opacity, and faint sink/fade are all computed from a base position plus an
+  `effects.ts` descriptor and `nowTick`.
+- `FrameStrip` — a baked frame-strip animation (an effect authored as N pak
+  images), swapping discrete image keys by tick like `PlayerSprite` chooses
+  a walk pose — **not** a native auto-play sprite atlas (`AnimatedTiles`'s
+  atlases cycle off the host's own vblank clock, which a save/rewind cannot
+  carry).
+
+Because every widget is this kind of pure function, a battle scene inherits
+the kit's L-key rewind and 60/30/20/4 Hz determinism for free, the same way
+the map layer does (`engine/attract.ts` folds from frame 0). A game that
+never registers `battle`/`battleScene` never imports `src/ui/battle/` (it is
+its own `pocket-rpgkit/ui/battle` export, separate from `pocket-rpgkit/ui`),
+so the module never reaches that game's bundle — proved for the sunstone
+example in `tests/battle-ui-bundle-isolation.test.ts`. A full worked demo —
+command grid, skill submenu with a disabled row, guard, escape, a hit's
+shake and HP tween, a faint's sink/fade, and win/lose messages, driven by a
+small `BattleRules` — lives in `tests/fixtures/kb4-battle/` (`rules.ts`,
+`scene.tsx`), exercised by `tests/kb4-battle-rules.test.ts` (the state
+machine) and `tests/kb4-battle-sim.test.ts` (rendered goldens, semantic
+pixel checks, and the Hz/determinism proofs).
+
 ## Using it in your own project
 
 The published package exports the engine surface (`pocket-rpgkit`), the
-Solid components (`pocket-rpgkit/ui`), the host adapters
-(`pocket-rpgkit/host`), and the schema (`pocket-rpgkit/schema`). The
+Solid components (`pocket-rpgkit/ui`), the battle UI kit
+(`pocket-rpgkit/ui/battle`), the host adapters (`pocket-rpgkit/host`), and
+the schema (`pocket-rpgkit/schema`). The
 in-repo examples import the sources relatively, because PocketJS's build
 pass 1 walks relative imports; `examples/meadow/meadow.tsx` shows the
 reducer loop by hand:
@@ -743,6 +799,10 @@ src/data/        schema.json (normative) + CHANGELOG
 src/ui/          GameView, ChunkLayer, StreamedChunkLayer, AnimatedTiles,
                  DialogBox, PlayerSprite, SaveMenu, Panel, theme
                  (UiTheme, speaker prefixes)
+src/ui/battle/   state-driven battle UI kit (StatBar, CommandGrid, ListMenu,
+                 MessageBand, SpriteSlot, FrameStrip, effects.ts tick math);
+                 its own "pocket-rpgkit/ui/battle" export, pulled in only by
+                 games that register battle/battleScene
 src/host/        data.fs save adapter, attract-tape loader
 tools/lib/       game-agnostic baking pipelines (bake.ts, chunks.ts,
                  stream.ts, animated.ts) and the desktop-host build/launch

@@ -1,0 +1,49 @@
+// src/ui/battle/FrameStrip.tsx — KB4: a baked frame-strip animation player
+// (a skill/impact effect authored as N separate pak images, e.g. a pak
+// "frame strip"). The frame shown is `frameIndexAt(nowTick, ...)`
+// (effects.ts) — a pure function of the caller's own reference-tick
+// cursor — NOT a native auto-play sprite atlas: an atlas cycles off the
+// host's vblank clock (see AnimatedTiles.tsx), which a save/rewind cannot
+// carry, so a state-dependent effect must swap discrete image keys the
+// same way PlayerSprite chooses a walk pose.
+
+import { Image } from "@pocketjs/framework/components";
+import { frameIndexAt } from "./effects.ts";
+
+export interface FrameStripProps {
+  /** Baked frame image keys, in playback order. */
+  frames: readonly string[];
+  /** Reference ticks each frame holds. */
+  frameTicks: number;
+  startTick: number;
+  nowTick: number;
+  loop?: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex?: number;
+  debugName?: string;
+}
+
+export function FrameStrip(props: FrameStripProps) {
+  const index = () =>
+    frameIndexAt(props.nowTick, props.startTick, props.frameTicks, props.frames.length, props.loop ?? false);
+  const src = () => props.frames[index()] ?? "";
+
+  return (
+    <Image
+      class="absolute"
+      src={src()}
+      style={{
+        posType: 1,
+        insetL: props.x,
+        insetT: props.y,
+        width: props.width,
+        height: props.height,
+        zIndex: props.zIndex ?? 0,
+      }}
+      debugName={props.debugName}
+    />
+  );
+}

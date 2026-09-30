@@ -1,0 +1,24 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.lfkdsk.pocket-rpgkit-kb4-battle-fixture",
+  "name": "pocket-rpgkit-kb4-battle-fixture",
+  "title": "Pocket RPG Kit — KB4 battle UI kit fixture",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": ["input.buttons"]
+    }
+  },
+  "app": {
+    "entry": "tests/fixtures/kb4-battle/kb4-battle.tsx",
+    "output": "kb4-battle",
+    "framework": "solid",
+    "viewport": {
+      "fixed": {
+        "logical": [480, 272],
+        "presentation": "integer-fit"
+      }
+    }
+  }
+}

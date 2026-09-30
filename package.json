@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./engine": "./src/engine/index.ts",
     "./ui": "./src/ui/index.ts",
+    "./ui/battle": "./src/ui/battle/index.ts",
     "./host": "./src/host/index.ts",
     "./schema": "./src/data/schema.json"
   },
