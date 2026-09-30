@@ -261,6 +261,175 @@ describe("sharded map repository", () => {
     expect([...session.maps.keys()]).toEqual(["map_01"]);
   });
 
+  test("fade-out preparation units are scheduled by reference ticks at every host hz", () => {
+    const project = fixture();
+    (project.maps[0]!.events![0]!.pages[0]!.commands[0] as { fade?: number }).fade = 0.4;
+    const split = splitProjectMaps(project);
+    const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
+
+    // Repository traffic recorded through a wrapper, one ordered list per host
+    // frame: "meta" is prepareSessionMapStep's per-tick manifest check (plus
+    // the swap's acquireSessionMap check), "step" is one acquireStep unit,
+    // "acquire" is a whole-map acquire (the fade=0 / fallback path).
+    type RepoEvent = "meta" | "step" | "acquire";
+    interface FadeTrace {
+      hz: number;
+      ticksPerFrame: number;
+      perFrame: RepoEvent[][];
+      afterFrame: SessionState[];
+      fullAcquires: number;
+      mapIds: string[];
+    }
+
+    const run = (hz: number): FadeTrace => {
+      const base = createJsonMapRepository(split.shell.mapIndex, {
+        read: (entry) => files.get(entry),
+      });
+      let tracing = false;
+      const perFrame: RepoEvent[][] = [];
+      const afterFrame: SessionState[] = [];
+      let fullAcquires = 0;
+      const repository: MapRepository = {
+        meta(id) {
+          if (tracing) perFrame[perFrame.length - 1]!.push("meta");
+          return base.meta(id);
+        },
+        acquire(id) {
+          if (tracing) {
+            perFrame[perFrame.length - 1]!.push("acquire");
+            fullAcquires++;
+          }
+          return base.acquire(id);
+        },
+        acquireStep(id) {
+          if (tracing) perFrame[perFrame.length - 1]!.push("step");
+          return base.acquireStep!(id);
+        },
+        releaseExcept: base.releaseExcept,
+      };
+      const session = createSession(split.shell, hz, repository);
+      let state = startSession(split.shell, session);
+      tracing = true;
+      for (let frame = 0; frame < hz * 2; frame++) {
+        perFrame.push([]);
+        state = stepSession(
+          session,
+          state,
+          frame === 0 ? { buttons: 0, confirmEdge: true } : { buttons: 0 },
+        );
+        afterFrame.push(state);
+      }
+      return {
+        hz,
+        ticksPerFrame: session.ticksPerFrame,
+        perFrame,
+        afterFrame,
+        fullAcquires,
+        mapIds: [...session.maps.keys()],
+      };
+    };
+
+    // Replay the fade state machine over the recorded trace and recover the
+    // reference tick of every acquireStep unit. The spec under test: during
+    // fade-out the engine prepares exactly one unit per reference tick (a
+    // manifest check each tick; an acquireStep on the first two prepares),
+    // swaps on the tick fade-out reaches zero (one more manifest check from
+    // acquireSessionMap), and never falls back to a whole-map acquire.
+    const reconstruct = (trace: FadeTrace, half: number) => {
+      const stepTicks: number[] = [];
+      let fade: { phase: "out" | "in"; left: number; half: number } | null = null;
+      let tick = 0;
+      let prepares = 0;
+      let metas = 0;
+      for (let frame = 0; frame < trace.perFrame.length; frame++) {
+        const events = trace.perFrame[frame]!;
+        let i = 0;
+        const take = (kind: RepoEvent): void => {
+          if (events[i] !== kind) {
+            throw new Error(
+              `hz ${trace.hz} frame ${frame} tick ${tick}: expected ${kind}, ` +
+                `saw ${events[i] ?? "nothing"} (frame trace ${JSON.stringify(events)})`,
+            );
+          }
+          i++;
+        };
+        for (let t = 0; t < trace.ticksPerFrame; t++) {
+          // Input edges are delivered on the first reference tick of the
+          // first host frame, so the transfer command executes on tick 0 at
+          // every host hz; the fade state machine starts on tick 1.
+          if (!fade && frame === 0 && t === 0) {
+            fade = { phase: "out", left: half, half };
+            tick++;
+            continue;
+          }
+          if (fade?.phase === "out") {
+            take("meta");
+            metas++;
+            prepares++;
+            if (prepares <= 2) {
+              take("step");
+              stepTicks.push(tick);
+            }
+          }
+          if (fade) {
+            fade.left--;
+            if (fade.left === 0) {
+              if (fade.phase === "out") {
+                take("meta");
+                metas++;
+                fade.phase = "in";
+                fade.left = fade.half;
+              } else {
+                fade = null;
+              }
+            }
+          }
+          tick++;
+        }
+        if (i !== events.length) {
+          throw new Error(
+            `hz ${trace.hz} frame ${frame}: ${events.length - i} unexpected event(s) ` +
+              JSON.stringify(events.slice(i)),
+          );
+        }
+        if (!fade) break;
+      }
+      return { stepTicks, prepares, metas };
+    };
+
+    // Calibrate on the 60 Hz fold: one host frame is one reference tick, so a
+    // fade.left === half after frame 0 proves the transfer executed on tick 0
+    // itself (the fade branch runs at the top of a tick, after the transfer).
+    const calib = run(60);
+    expect(calib.afterFrame[0]!.fade).toEqual({ phase: "out", left: 12, half: 12 });
+    const half = calib.afterFrame[0]!.fade!.half;
+
+    const profiles = [calib, run(30), run(20), run(4)].map((trace) => {
+      const { stepTicks, prepares, metas } = reconstruct(trace, half);
+      expect(trace.afterFrame[trace.afterFrame.length - 1]!.mapId).toBe("map_01");
+      expect(trace.mapIds).toEqual(["map_01"]);
+      return {
+        hz: trace.hz,
+        stepTicks,
+        prepares,
+        metas,
+        fullAcquires: trace.fullAcquires,
+      };
+    });
+
+    for (const profile of profiles) {
+      // The two parse/validate units fire on the first two fade-out ticks,
+      // counted in reference ticks — identical at 60/30/20/4 Hz.
+      expect(profile.stepTicks).toEqual([1, 2]);
+      expect(profile.prepares).toBe(12);
+      expect(profile.metas).toBe(13); // 12 per-tick checks + the swap check
+      expect(profile.fullAcquires).toBe(0); // no whole-map acquire during fade
+    }
+    expect(
+      new Set(profiles.map(({ hz: _hz, ...rest }) => JSON.stringify(rest))).size,
+    ).toBe(1);
+  });
+
   test("a zero-fade transfer keeps its all-at-once acquire", () => {
     const split = splitProjectMaps(fixture());
     const files = new Map(split.entries.map((entry) => [entry.path, entry.bytes]));
