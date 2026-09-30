@@ -266,5 +266,27 @@ Three optional, backwards-compatible additions from Scout S1 §5–6
   envelope with a typed `SaveError` instead of silently restoring an
   out-of-range value.
 
+## v1 amendment — 2026-09-29 (shared battle and extension inventory)
+
+- `BattleRules.start` receives a fourth read-only context containing the live
+  extension state, switches, variables, items and gold. The session always
+  supplies it; existing three-parameter JavaScript/TypeScript implementations
+  remain compatible and ignore the extra argument.
+- `ExtensionCommandResult` and `BattleCompletion` may return `items` and
+  `gold` replacements. They update the same `SessionState.sw` backpack and
+  wallet used by item/gold commands and shops, atomically with extension,
+  variable and switch writes and before a subsequent command or battle-result
+  branch.
+- `items` replaces only listed ids. Each finite count is floored through
+  `clampFiniteVar`, clamped to `[0, system.inventory.maxPerItem]`, and a zero
+  result removes the id. Removals and replacements of currently held kinds
+  happen first; previously unheld positive ids are then admitted in lexical
+  id order until `system.inventory.maxKinds`, and excess ids are discarded.
+  `gold` is likewise floored/clamped to a safe integer and then to zero or
+  above. This ordering is deterministic regardless of object insertion order.
+- The values use the existing save/snapshot/rewind path and fixed-rate fold.
+  `canSave` is unchanged: an active battle or queued external work is still
+  not a save point.
+
 Breaking changes to any of the above require a new marker
 (`rpgkit-project/v2`) and a new entry here.

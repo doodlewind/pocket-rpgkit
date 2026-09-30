@@ -6,6 +6,7 @@
 
 import { deepClone } from "./clone.ts";
 import { assertJsonValue } from "./extensions.ts";
+import type { ExtensionReadContext } from "./extensions.ts";
 import type { Dir, JsonValue, VariableValue } from "./types.ts";
 
 export interface BattleInput {
@@ -32,6 +33,11 @@ export interface BattleCompletion {
   result: BattleResult;
   writes?: Readonly<Record<string, VariableValue>>;
   switches?: Readonly<Record<string, boolean>>;
+  /** Item-count replacements committed to the session backpack. A
+   *  normalized count of zero removes the item. */
+  items?: Readonly<Record<string, number>>;
+  /** Replacement for the session wallet. */
+  gold?: number;
   transfer?: BattleTransfer;
 }
 
@@ -41,7 +47,12 @@ export interface BattleStart {
 }
 
 export interface BattleRules {
-  start(ext: JsonValue, setup: JsonValue, seed: number): BattleStart | null;
+  start(
+    ext: JsonValue,
+    setup: JsonValue,
+    seed: number,
+    context: ExtensionReadContext,
+  ): BattleStart | null;
   /** One host-frame fold. ticks is the number of fixed 60 Hz reference ticks
    * represented by that host frame (1/2/3/15 at 60/30/20/4 Hz). */
   step(state: JsonValue, input: Readonly<BattleInput>, ticks: number): JsonValue;

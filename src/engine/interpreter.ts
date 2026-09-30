@@ -1202,6 +1202,44 @@ export function clampFiniteVar(n: number): number {
   return floored;
 }
 
+/** Apply an extension/battle item patch without mutating the live backpack.
+ * Counts replace rather than add: finite values are floored, clamped to
+ * [0, maxPerItem], and zero deletes the id. Existing positive kinds keep
+ * their slots. Once removals have freed slots, previously unheld positive
+ * ids are admitted in lexical id order until maxKinds; the rest are
+ * deterministically discarded. */
+export function replaceItemCounts(
+  current: Readonly<Record<string, number>>,
+  replacements: Readonly<Record<string, number>>,
+  inventory?: Readonly<{ maxPerItem?: number; maxKinds?: number }>,
+): Record<string, number> {
+  const next = keyedRecord(current);
+  const normalized = keyedRecord<number>();
+  const ids = Object.keys(replacements).sort();
+  const maxPerItem = inventory?.maxPerItem ?? SHOP_ITEM_CAP;
+
+  for (const id of ids) {
+    normalized[id] = Math.min(maxPerItem, Math.max(0, clampFiniteVar(replacements[id]!)));
+    delete next[id];
+  }
+
+  const newKinds: string[] = [];
+  for (const id of ids) {
+    const count = normalized[id]!;
+    if (count === 0) continue;
+    if ((current[id] ?? 0) > 0) next[id] = count;
+    else newKinds.push(id);
+  }
+
+  let heldKinds = kindsHeld(next);
+  for (const id of newKinds) {
+    if (inventory?.maxKinds !== undefined && heldKinds >= inventory.maxKinds) continue;
+    next[id] = normalized[id]!;
+    heldKinds++;
+  }
+  return next;
+}
+
 /** clampFiniteVar over every value of a numeric bank (items/shopStock).
  *  `nonNegative` additionally floors at 0, for shopStock's non-negative
  *  invariant. Used by createSwitchState, which construction, restore and
@@ -1401,6 +1439,7 @@ interface MutableExtensionScope extends ExtensionScope {
 
 function runExtensionCommand(
   s: InterpState,
+  w: World,
   extension: MutableExtensionScope,
   call: string,
   args: JsonValue,
@@ -1433,10 +1472,12 @@ function runExtensionCommand(
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     throw new Error(`extension command ${JSON.stringify(call)} must return an object or undefined`);
   }
+  let nextExt = extension.ext;
   if (Object.prototype.hasOwnProperty.call(result, "ext")) {
     assertJsonValue(result.ext, `extension command ${JSON.stringify(call)} result.ext`);
-    extension.ext = cloneExtension(extension.runtime, result.ext, `extension command ${JSON.stringify(call)} result.ext`);
+    nextExt = cloneExtension(extension.runtime, result.ext, `extension command ${JSON.stringify(call)} result.ext`);
   }
+  const writes: [string, VariableValue][] = [];
   if (result.writes !== undefined) {
     if (result.writes === null || typeof result.writes !== "object" || Array.isArray(result.writes)) {
       throw new Error(`extension command ${JSON.stringify(call)} result.writes must be a record`);
@@ -1446,14 +1487,45 @@ function runExtensionCommand(
       if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
         throw new Error(`extension command ${JSON.stringify(call)} write ${JSON.stringify(id)} must be a string or finite number`);
       }
-      // B1 (fix 3): an ext command's numeric write shares
-      // the same finite-safe-integer normalizer as every other variable
-      // write, so an extension cannot smuggle a value save-validate.ts
-      // would refuse (or that overflows on the next arithmetic write) past
-      // this boundary.
-      s.sw.variables[id] = typeof value === "number" ? clampFiniteVar(value) : value;
+      writes.push([id, value]);
     }
   }
+  let itemReplacements: Record<string, number> | undefined;
+  if (result.items !== undefined) {
+    if (result.items === null || typeof result.items !== "object" || Array.isArray(result.items)) {
+      throw new Error(`extension command ${JSON.stringify(call)} result.items must be a record`);
+    }
+    itemReplacements = keyedRecord();
+    for (const id of Object.keys(result.items)) {
+      const value = result.items[id];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`extension command ${JSON.stringify(call)} item ${JSON.stringify(id)} must be a finite number`);
+      }
+      itemReplacements[id] = value;
+    }
+  }
+  let gold: number | undefined;
+  if (result.gold !== undefined) {
+    if (typeof result.gold !== "number" || !Number.isFinite(result.gold)) {
+      throw new Error(`extension command ${JSON.stringify(call)} result.gold must be a finite number`);
+    }
+    gold = Math.max(0, clampFiniteVar(result.gold));
+  }
+
+  // Validate and normalize every returned bank before publishing any of
+  // them. The next instruction/condition therefore observes one atomic
+  // ext/variable/item/gold replacement.
+  const items = itemReplacements === undefined
+    ? undefined
+    : replaceItemCounts(s.sw.items, itemReplacements, w.inventory);
+  extension.ext = nextExt;
+  for (const [id, value] of writes) {
+    // B1 (fix 3): an ext command's numeric write shares the same
+    // finite-safe-integer normalizer as every other variable write.
+    s.sw.variables[id] = typeof value === "number" ? clampFiniteVar(value) : value;
+  }
+  if (items !== undefined) s.sw.items = items;
+  if (gold !== undefined) s.sw.gold = gold;
 }
 
 function variableRef(value: unknown): value is VariableRef {
@@ -1821,7 +1893,7 @@ function runFiber(
         break;
       }
       case "ext":
-        runExtensionCommand(s, extension, ins.call, ins.args);
+        runExtensionCommand(s, w, extension, ins.call, ins.args);
         top.pc++;
         break;
       case "battle":

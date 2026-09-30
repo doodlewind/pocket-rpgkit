@@ -109,7 +109,13 @@ function settle(session: Session, state: SessionState): SessionState {
 
 describe("KB2 battle processing", () => {
   test("toy damage is independent of host randomness", () => {
-    const started = toyBattleRules.start(null, { enemyHp: 99 }, 0x1234_5678);
+    const started = toyBattleRules.start(null, { enemyHp: 99 }, 0x1234_5678, {
+      ext: null,
+      switches: {},
+      variables: {},
+      items: {},
+      gold: 0,
+    });
     expect(started).not.toBeNull();
     const originalRandom = Math.random;
     let hostDraws = 0;

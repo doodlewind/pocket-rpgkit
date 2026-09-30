@@ -386,9 +386,12 @@ const session = createSession(project, simulationHz(), {
 
 An extension command receives read-only ext/switch/variable/item/gold data
 and a `random()` function backed by the session's saved mulberry32 cursor.
-It returns replacement `ext` and/or variable `writes`; an extension
-condition is read-only and has no random API. Call names must contain a
-namespace (`game.action`). `createSession` lists every command or condition
+It returns replacement `ext`, variable `writes`, and/or per-item `items` and
+wallet `gold` replacements. An extension condition is read-only and has no
+random API. Item and gold results update the same `SessionState.sw` backpack
+and wallet used by authored item/gold commands and shops; a later command or
+condition in the same tick sees the committed values. Call names must contain
+a namespace (`game.action`). `createSession` lists every command or condition
 used by an inline project but not registered. Editor previews may explicitly
 set `allowUnknown: true`, which makes unknown commands no-ops and conditions
 false. For a sharded project, the same check runs as each map is acquired.
@@ -400,26 +403,41 @@ older v1 save without it loads as `null`.
 
 ```ts
 interface BattleRules {
-  start(ext, setup, seed): { state: JsonValue; ext: JsonValue } | null;
+  start(ext, setup, seed, context): { state: JsonValue; ext: JsonValue } | null;
   step(state, input, ticks): JsonValue;
   done(state): null | {
     ext: JsonValue;
     result: "win" | "lose" | "escape" | "draw";
     writes?: Record<string, number | string>;
     switches?: Record<string, boolean>;
+    items?: Record<string, number>;
+    gold?: number;
     transfer?: { map: string; x: number; y: number; dir?: Dir | "keep"; fade?: number };
   };
 }
 ```
 
 Starting a battle consumes exactly one session RNG draw and gives the
-derived u32 seed to `start`; `null` means no encounter and resumes the event
-immediately. Otherwise the event fiber parks in external mode and the JSON
-battle state lives in `SessionState.scene`. `step` is called once per host
-frame with 1/2/3/15 fixed reference ticks at 60/30/20/4 Hz. On completion,
-ext, variable writes, and boolean switch writes commit atomically, the matching
-result branch runs, and an optional transfer runs after that branch. `draw`
-has no branch.
+derived u32 seed to `start`. Its fourth argument is the same read-only
+ext/switch/variable/item/gold context extension conditions receive, captured
+after the event or shop that requested the battle; existing three-parameter
+rule implementations remain valid and simply ignore the extra argument.
+`null` means no encounter and resumes the event immediately. Otherwise the
+event fiber parks in external mode and the JSON battle state lives in
+`SessionState.scene`. `step` is called once per host frame with 1/2/3/15 fixed
+reference ticks at 60/30/20/4 Hz. On completion, ext, variable writes, boolean
+switch writes, item counts, and gold commit atomically before the matching
+result branch; an optional transfer runs after that branch. `draw` has no
+branch.
+
+An `items` result replaces only the listed ids rather than replacing the
+whole backpack. Each finite count is floored through `clampFiniteVar`, clamped
+to `[0, system.inventory.maxPerItem]`, and zero removes the id. All removals
+and updates to currently held kinds apply first; new positive kinds are then
+admitted in lexical id order until `system.inventory.maxKinds`, with later
+kinds discarded. A `gold` result replaces the wallet after the same finite
+integer normalization and a non-negative clamp. These rules make results
+independent of object insertion order.
 
 Battle requests are the deliberate ordering exception: requests newly emitted
 in one reference tick are staged and appended main first, then by ascending

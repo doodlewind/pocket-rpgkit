@@ -210,13 +210,15 @@ argument remains accepted for v1 callers.
 
 An `ext` command handler receives cloned JSON arguments, read-only built-in
 banks and `random()`, the only permitted entropy source. It returns a new
-`ext` value and/or finite number/string variable replacements. An `ext`
-condition is read-only and cannot draw randomness. `SessionState.ext`
-defaults to `null`; its validator runs on every boundary, its optional codec
-wraps save/restore bytes, and save checksums cover the encoded form. Inline
-projects validate every namespaced call at `createSession`; sharded projects
-also validate each acquired map. `allowUnknown` is an explicit preview-only
-escape hatch.
+`ext` value and/or finite number/string variable replacements, per-item count
+replacements, and a wallet replacement. All returned banks validate before
+any commit, and later instructions in the same interpreter tick see the new
+items and gold. An `ext` condition is read-only and cannot draw randomness.
+`SessionState.ext` defaults to `null`; its validator runs on every boundary,
+its optional codec wraps save/restore bytes, and save checksums cover the
+encoded form. Inline projects validate every namespaced call at
+`createSession`; sharded projects also validate each acquired map.
+`allowUnknown` is an explicit preview-only escape hatch.
 
 A `battle` command parks its fiber and publishes a setup JSON value. General
 interpreter execution remains parallel fibers (ascending event key) before the
@@ -227,14 +229,28 @@ fibers by ascending event key. The queue head starts immediately when the
 scene slot is free. After a scene completes and resumes its owner, the next
 queued request starts on the next reference tick. A `start()` result of
 `null` resumes that fiber immediately and consumes no scene slot.
-`BattleRules.start(ext, setup, seed)` may decline with `null`; otherwise its
-returned JSON state becomes `SessionState.scene.state`.
+`BattleRules.start(ext, setup, seed, context)` may decline with `null`;
+otherwise its returned JSON state becomes `SessionState.scene.state`.
+`context` is a read-only snapshot of the session's ext, switches, variables,
+items and gold at battle entry. Existing three-parameter implementations stay
+compatible because the additional argument may be ignored.
 `BattleRules.step(state, input, ticks)` receives only scene input, once per
 host frame, with fixed-reference `ticks`. `done` returns ext, a
-win/lose/escape/draw result, optional variable and switch writes, and an
-optional transfer. Completion validates every value before committing any of
-them, runs the result branch, then runs the transfer; the transfer can
+win/lose/escape/draw result, optional variable/switch/item/gold replacements,
+and an optional transfer. Completion validates every value before committing
+any of them, runs the result branch, then runs the transfer; the transfer can
 therefore rebuild the map interpreter without discarding branch effects.
+
+`ExtensionCommandResult.items` and `BattleCompletion.items` replace only the
+listed ids. Counts are floored through `clampFiniteVar`, clamped non-negative
+and to `system.inventory.maxPerItem`, with zero removing an id. Removals and
+updates to already-held kinds happen first. New positive kinds are considered
+in lexical id order until `system.inventory.maxKinds`; excess kinds are
+dropped. `gold` similarly replaces the wallet after finite-integer and
+non-negative clamping. Both paths write `SessionState.sw`, the same backpack
+and wallet used by shops and authored commands. The values therefore retain
+the existing save, rewind and multi-Hz behavior; the save gate itself is
+unchanged, so an active battle remains non-saveable.
 
 Scene-time map behavior freezes the map by default, matching RPG Maker MV and
 Tuxemon:

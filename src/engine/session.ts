@@ -45,6 +45,7 @@ import {
   isBusy,
   messageHoldsPlayer,
   randInt,
+  replaceItemCounts,
   rngNext,
   secondsToFrames,
   stepInterpWithExtensions,
@@ -669,10 +670,18 @@ function startBattleScene(sess: Session, s: SessionState, request: PendingBattle
   s.interp.sw.rng = draw.next;
   s.sw = s.interp.sw;
   const seed = Math.floor(draw.value * 4294967296) >>> 0;
+  const startExt = cloneExtension(sess.extensions, s.ext);
   const started = rules.start(
-    cloneExtension(sess.extensions, s.ext),
+    startExt,
     deepClone(request.setup),
     seed,
+    {
+      ext: cloneExtension(sess.extensions, s.ext),
+      switches: keyedRecord(s.interp.sw.switches),
+      variables: keyedRecord(s.interp.sw.variables),
+      items: keyedRecord(s.interp.sw.items),
+      gold: s.interp.sw.gold,
+    },
   );
   if (started === null) {
     s.interp = continueExternal(s.interp, request.fiber);
@@ -806,7 +815,31 @@ function advanceBattleScene(
       switches.push([id, value]);
     }
   }
+  let itemReplacements: Record<string, number> | undefined;
+  if (completion.items !== undefined) {
+    if (completion.items === null || typeof completion.items !== "object" || Array.isArray(completion.items)) {
+      throw new Error("battle completion items must be a record");
+    }
+    itemReplacements = keyedRecord();
+    for (const id of Object.keys(completion.items)) {
+      const value = completion.items[id];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`battle completion item ${JSON.stringify(id)} must be a finite number`);
+      }
+      itemReplacements[id] = value;
+    }
+  }
+  let gold: number | undefined;
+  if (completion.gold !== undefined) {
+    if (typeof completion.gold !== "number" || !Number.isFinite(completion.gold)) {
+      throw new Error("battle completion gold must be a finite number");
+    }
+    gold = Math.max(0, clampFiniteVar(completion.gold));
+  }
   const transfer = completionTransfer(completion.transfer);
+  const items = itemReplacements === undefined
+    ? undefined
+    : replaceItemCounts(s.interp.sw.items, itemReplacements, sess.worldOptions.inventory);
 
   s.ext = nextExt;
   // B1 (fix 3): a battle completion's numeric write shares
@@ -816,6 +849,8 @@ function advanceBattleScene(
     s.interp.sw.variables[id] = typeof value === "number" ? clampFiniteVar(value) : value;
   }
   for (const [id, value] of switches) s.interp.sw.switches[id] = value;
+  if (items !== undefined) s.interp.sw.items = items;
+  if (gold !== undefined) s.interp.sw.gold = gold;
   if (scene.pausedTicks > 0) {
     const shift = (fiber: SessionState["interp"]["main"]): void => {
       if (fiber?.mode === "wait" || fiber?.mode === "text") fiber.since += scene.pausedTicks;

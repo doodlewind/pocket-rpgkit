@@ -28,6 +28,11 @@ export interface ExtensionCommandResult {
   ext?: JsonValue;
   /** Atomic replacements in the built-in variable bank. */
   writes?: Readonly<Record<string, VariableValue>>;
+  /** Atomic item-count replacements in the session backpack. A normalized
+   *  count of zero removes the item. */
+  items?: Readonly<Record<string, number>>;
+  /** Atomic replacement for the session wallet. */
+  gold?: number;
 }
 
 export type ExtensionCommandHandler = (
